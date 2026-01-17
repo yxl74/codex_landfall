@@ -52,6 +52,14 @@ Why we use a threshold:
 - Validation counts: 109 (17 malicious, 92 benign)
 - Test counts: 111 (13 malicious, 98 benign)
 
+Class breakdown after deduplication (unique samples):
+
+| Class | Count | Notes |
+| --- | --- | --- |
+| LandFall | 6 | All unique LandFall samples |
+| general_mal | 95 | 5 files duplicate LandFall samples and collapse in dedup |
+| benign | 630 | Benign TIFF/DNG/RAW corpus |
+
 ---
 
 ## 4) Pipeline overview (training and inference)
@@ -136,7 +144,29 @@ Metrics from outputs/hybrid_metrics.json:
 | Val | 0.982 | 1.000 | 0.882 | 0.938 | - | 15 | 92 | 0 | 2 |
 | Test | 0.973 | 0.812 | 1.000 | 0.897 | 0.998 | 13 | 95 | 3 | 0 |
 
-### 7.1 Ablation study (outputs/ablation_results.md)
+### 7.1 Test split class breakdown
+Test composition after dedup (seed=42):
+
+| Class | Count | Notes |
+| --- | --- | --- |
+| LandFall | 1 | Only 1 sample falls in the test split |
+| general_mal | 12 | General TIFF malware |
+| benign | 98 | Benign TIFF/DNG/RAW |
+
+Per-class test results at Thr=0.20:
+
+| Class | Count | Recall / FPR | Score min | Score mean | Score max |
+| --- | --- | --- | --- | --- | --- |
+| LandFall | 1 | Recall 1.00 | 0.99996 | 0.99996 | 0.99996 |
+| general_mal | 12 | Recall 1.00 | 0.405 | 0.950 | 1.000 |
+| benign | 98 | FPR 0.031 | 0.00001 | 0.037 | 0.99989 |
+
+Interpretation:
+- LandFall results are strong but based on a single test sample; treat as directional only.
+- General TIFF malware is well separated at this threshold, but has a wider score range.
+- The benign tail contains a few high-score outliers that drive false positives.
+
+### 7.2 Ablation study (outputs/ablation_results.md)
 | Model | Acc | Prec | Recall | F1 | ROC-AUC | Thr |
 | --- | --- | --- | --- | --- | --- | --- |
 | rules_flag_any | 0.991 | 1.000 | 0.923 | 0.960 | 0.000 | 0.50 |
@@ -164,6 +194,14 @@ Bench set path: /sdcard/Android/data/com.landfall.hybriddetector/files/bench_ful
 | Avg feature extraction time | 11.211 ms / file |
 | Avg inference time | 0.062 ms / file |
 | Log source | outputs/device_log.txt |
+
+On-device class breakdown at Thr=0.20:
+
+| Class | Total | Flagged | Recall / FPR |
+| --- | --- | --- | --- |
+| LandFall | 6 | 6 | Recall 1.00 |
+| general_mal | 100 | 98 | Recall 0.98 |
+| benign | 100 | 2 | FPR 0.02 |
 
 ### 8.1 Device vs local TFLite parity
 Comparison uses the same feature extractor logic and the same TFLite model.
