@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="status_benign">#2E7D32</color>
+    <color name="status_malicious">#B00020</color>
+    <color name="status_neutral">#444444</color>
+</resources>

@@ -1,0 +1,29 @@
+# Data and training artifacts
+/data/
+/outputs/
+/.venv*/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Android/Gradle
+/android/HybridDetectorApp/.gradle/
+/android/HybridDetectorApp/app/build/
+/android/HybridDetectorApp/build/
+/android/HybridDetectorApp/local.properties
+/android/HybridDetectorApp/.idea/
+
+# IDE/editor
+.vscode/
+.idea/
+*.iml
+
+# Logs
+*.log
+
+# Temporary wrapper extract
+/gradle-wrapper.jar
+
+# Temporary extraction artifacts
+/META-INF/
