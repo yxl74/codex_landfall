@@ -148,6 +148,7 @@ def build_struct_features(X_struct: np.ndarray, names: List[str]) -> Tuple[np.nd
         "opcode_list1_bytes",
         "opcode_list2_bytes",
         "opcode_list3_bytes",
+        "max_declared_opcode_count",
     }
     X = X_struct.astype(np.float32).copy()
     name_to_idx = {n: i for i, n in enumerate(names)}

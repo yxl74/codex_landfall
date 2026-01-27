@@ -1,5 +1,5 @@
 {
-  "feature_dim": 535,
+  "feature_dim": 539,
   "bytes_mode": "hist",
   "struct_feature_names": [
     "is_tiff",
@@ -15,6 +15,10 @@
     "opcode_list1_bytes",
     "opcode_list2_bytes",
     "opcode_list3_bytes",
+    "max_declared_opcode_count",
+    "spp_max",
+    "compression_variety",
+    "tile_count_ratio",
     "zip_eocd_near_end",
     "zip_local_in_tail",
     "flag_opcode_anomaly",

@@ -25,5 +25,8 @@ __pycache__/
 # Temporary wrapper extract
 /gradle-wrapper.jar
 
+# Large binaries
+/android/HybridDetectorApp/apk/*.apk
+
 # Temporary extraction artifacts
 /META-INF/

@@ -102,6 +102,7 @@ def build_struct_features(X_struct: np.ndarray, names: List[str]) -> np.ndarray:
         "opcode_bytes_ratio_permille",
         "opcode_bytes_per_opcode_milli",
         "unknown_opcode_ratio_permille",
+        "max_declared_opcode_count",
     }
     X = X_struct.astype(np.float32).copy()
     name_to_idx = {n: i for i, n in enumerate(names)}

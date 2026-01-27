@@ -1,0 +1,8 @@
+{
+  "model": "tagseq_gru_ae",
+  "threshold": 0.741898147463798,
+  "threshold_percentile": 99.0,
+  "max_seq_len": 512,
+  "feature_dim": 12,
+  "requires_flex": true
+}

@@ -53,6 +53,7 @@ def main() -> int:
         "opcode_list1_bytes",
         "opcode_list2_bytes",
         "opcode_list3_bytes",
+        "max_declared_opcode_count",
     }
     mask = np.zeros((d,), dtype=np.float32)
     for i, name in enumerate(struct_feature_names):

@@ -5,6 +5,8 @@ import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.ceil
 
 data class TiffFeatures(
     val isTiff: Int,
@@ -20,6 +22,21 @@ data class TiffFeatures(
     val opcodeList1Bytes: Int,
     val opcodeList2Bytes: Int,
     val opcodeList3Bytes: Int,
+    val maxWidth: Int = 0,
+    val maxHeight: Int = 0,
+    val totalPixels: Int = 0,
+    val fileSize: Int = 0,
+    val bytesPerPixelMilli: Int = 0,
+    val pixelsPerMb: Int = 0,
+    val opcodeListBytesTotal: Int = 0,
+    val opcodeListBytesMax: Int = 0,
+    val opcodeListPresentCount: Int = 0,
+    val opcodeBytesRatioPermille: Int = 0,
+    val opcodeBytesPerOpcodeMilli: Int = 0,
+    val unknownOpcodeRatioPermille: Int = 0,
+    val hasOpcodeList1: Int = 0,
+    val hasOpcodeList2: Int = 0,
+    val hasOpcodeList3: Int = 0,
     val zipEocdNearEnd: Int,
     val zipLocalInTail: Int,
     val flagOpcodeAnomaly: Int,
@@ -28,6 +45,16 @@ data class TiffFeatures(
     val flagDngJpegMismatch: Int,
     val flagMagikaExtMismatch: Int,
     val flagAny: Int,
+    // CVE-relevant fields
+    val maxDeclaredOpcodeCount: Int = 0,
+    val compressionValues: Set<Int> = emptySet(),
+    val sppValues: Set<Int> = emptySet(),
+    val sof3ComponentMismatch: Boolean = false,
+    val tileOffsetsCount: Int = 0,
+    val tileByteCountsCount: Int = 0,
+    val expectedTileCount: Int = 0,
+    val tileWidths: List<Int> = emptyList(),
+    val tileHeights: List<Int> = emptyList(),
 ) {
     fun toFeatureMap(): Map<String, Int> {
         return mapOf(
@@ -44,6 +71,21 @@ data class TiffFeatures(
             "opcode_list1_bytes" to opcodeList1Bytes,
             "opcode_list2_bytes" to opcodeList2Bytes,
             "opcode_list3_bytes" to opcodeList3Bytes,
+            "max_width" to maxWidth,
+            "max_height" to maxHeight,
+            "total_pixels" to totalPixels,
+            "file_size" to fileSize,
+            "bytes_per_pixel_milli" to bytesPerPixelMilli,
+            "pixels_per_mb" to pixelsPerMb,
+            "opcode_list_bytes_total" to opcodeListBytesTotal,
+            "opcode_list_bytes_max" to opcodeListBytesMax,
+            "opcode_list_present_count" to opcodeListPresentCount,
+            "opcode_bytes_ratio_permille" to opcodeBytesRatioPermille,
+            "opcode_bytes_per_opcode_milli" to opcodeBytesPerOpcodeMilli,
+            "unknown_opcode_ratio_permille" to unknownOpcodeRatioPermille,
+            "has_opcode_list1" to hasOpcodeList1,
+            "has_opcode_list2" to hasOpcodeList2,
+            "has_opcode_list3" to hasOpcodeList3,
             "zip_eocd_near_end" to zipEocdNearEnd,
             "zip_local_in_tail" to zipLocalInTail,
             "flag_opcode_anomaly" to flagOpcodeAnomaly,
@@ -52,6 +94,10 @@ data class TiffFeatures(
             "flag_dng_jpeg_mismatch" to flagDngJpegMismatch,
             "flag_magika_ext_mismatch" to flagMagikaExtMismatch,
             "flag_any" to flagAny,
+            "max_declared_opcode_count" to maxDeclaredOpcodeCount,
+            "spp_max" to (sppValues.maxOrNull() ?: 0),
+            "compression_variety" to compressionValues.size,
+            "tile_count_ratio" to if (expectedTileCount > 0) (tileOffsetsCount * 1000 / expectedTileCount) else 0,
         )
     }
 }
@@ -64,6 +110,13 @@ object TiffParser {
 
     private const val TAG_WIDTH = 256
     private const val TAG_HEIGHT = 257
+    private const val TAG_COMPRESSION = 259
+    private const val TAG_SAMPLES_PER_PIXEL = 277
+    private const val TAG_STRIP_OFFSETS = 273
+    private const val TAG_TILE_WIDTH = 322
+    private const val TAG_TILE_HEIGHT = 323
+    private const val TAG_TILE_OFFSETS = 324
+    private const val TAG_TILE_BYTE_COUNTS = 325
     private const val TAG_SUBIFD = 330
     private const val TAG_EXIF_IFD = 34665
     private const val TAG_DNG_VERSION = 50706
@@ -71,6 +124,8 @@ object TiffParser {
     private const val TAG_OPCODE_LIST1 = 51008
     private const val TAG_OPCODE_LIST2 = 51009
     private const val TAG_OPCODE_LIST3 = 51022
+
+    private const val MAX_SOF3_SCAN = 65536
 
     fun parse(path: String): TiffFeatures {
         val file = File(path)
@@ -109,6 +164,17 @@ object TiffParser {
             val newSubfileTypes = mutableSetOf<Int>()
             val opcodeLists = mutableMapOf<Int, Pair<Long, Int>>()
 
+            // CVE-relevant collectors
+            val compressionValues = mutableSetOf<Int>()
+            val sppValues = mutableSetOf<Int>()
+            val tileOffsetsCountList = mutableListOf<Int>()
+            val tileByteCountsCountList = mutableListOf<Int>()
+            val tileWidthsList = mutableListOf<Int>()
+            val tileHeightsList = mutableListOf<Int>()
+            // Per-IFD (compression, spp, stripOffset) for SOF3 scanning
+            data class Sof3Candidate(val compression: Int, val spp: Int, val stripOffset: Long)
+            val sof3Candidates = mutableListOf<Sof3Candidate>()
+
             val visited = mutableSetOf<Long>()
             val stack = ArrayDeque<Long>()
             stack.add(root)
@@ -122,6 +188,11 @@ object TiffParser {
                     val count = readU16(raf, off, order)
                     if (count <= 0) continue
                     ifdEntryMax = max(ifdEntryMax, count)
+
+                    // Per-IFD locals for SOF3 candidate tracking
+                    var localCompression: Int? = null
+                    var localSpp: Int? = null
+                    var localStripOffset: Long? = null
 
                     val entryBase = off + 2
                     for (i in 0 until count) {
@@ -146,6 +217,47 @@ object TiffParser {
                             }
                         }
 
+                        if (tag == TAG_COMPRESSION) {
+                            val vals = readValues(raf, order, size, typeId, valCount, valueOrOffset)
+                            if (vals.isNotEmpty()) {
+                                compressionValues.addAll(vals)
+                                localCompression = vals[0]
+                            }
+                        }
+
+                        if (tag == TAG_SAMPLES_PER_PIXEL) {
+                            val vals = readValues(raf, order, size, typeId, valCount, valueOrOffset)
+                            if (vals.isNotEmpty()) {
+                                sppValues.addAll(vals)
+                                localSpp = vals[0]
+                            }
+                        }
+
+                        if (tag == TAG_STRIP_OFFSETS) {
+                            val vals = readValues(raf, order, size, typeId, valCount, valueOrOffset)
+                            if (vals.isNotEmpty()) {
+                                localStripOffset = vals[0].toLong() and 0xFFFFFFFFL
+                            }
+                        }
+
+                        if (tag == TAG_TILE_OFFSETS) {
+                            tileOffsetsCountList.add(valCount)
+                        }
+
+                        if (tag == TAG_TILE_BYTE_COUNTS) {
+                            tileByteCountsCountList.add(valCount)
+                        }
+
+                        if (tag == TAG_TILE_WIDTH) {
+                            val vals = readValues(raf, order, size, typeId, valCount, valueOrOffset)
+                            if (vals.isNotEmpty()) tileWidthsList.addAll(vals)
+                        }
+
+                        if (tag == TAG_TILE_HEIGHT) {
+                            val vals = readValues(raf, order, size, typeId, valCount, valueOrOffset)
+                            if (vals.isNotEmpty()) tileHeightsList.addAll(vals)
+                        }
+
                         if (tag == TAG_SUBIFD) {
                             val sizeBytes = TYPE_SIZES.getOrDefault(typeId, 1) * valCount
                             if (sizeBytes <= 4) {
@@ -166,6 +278,11 @@ object TiffParser {
                         }
                     }
 
+                    // Record SOF3 candidate if we have both compression and SPP
+                    if (localCompression != null && localSpp != null && localStripOffset != null) {
+                        sof3Candidates.add(Sof3Candidate(localCompression, localSpp, localStripOffset))
+                    }
+
                     val nextIfd = readU32(raf, entryBase + count * 12L, order)
                     if (nextIfd > 0) stack.add(nextIfd.toLong())
                 }
@@ -178,6 +295,8 @@ object TiffParser {
 
             val minWidth = widths.minOrNull() ?: 0
             val minHeight = heights.minOrNull() ?: 0
+            val maxWidth = widths.maxOrNull() ?: 0
+            val maxHeight = heights.maxOrNull() ?: 0
 
             var totalOpcodes = 0
             var unknownOpcodes = 0
@@ -185,16 +304,18 @@ object TiffParser {
             var list1Bytes = 0
             var list2Bytes = 0
             var list3Bytes = 0
+            var maxDeclaredOpcodeCount = 0
 
             for ((tag, pair) in opcodeLists) {
                 val offset = pair.first
                 val sizeBytes = pair.second
                 if (offset <= 0 || sizeBytes < 4 || offset + sizeBytes > size) continue
                 val buf = readBytes(raf, offset, sizeBytes)
-                val opcodeCount = readU32BE(buf, 0)
+                val declaredCount = readU32BE(buf, 0)
+                maxDeclaredOpcodeCount = max(maxDeclaredOpcodeCount, declaredCount)
                 var pos = 4
                 var parsed = 0
-                while (parsed < opcodeCount && pos + 16 <= buf.size) {
+                while (parsed < declaredCount && pos + 16 <= buf.size) {
                     val opcodeId = readU32BE(buf, pos)
                     val dataSize = readU32BE(buf, pos + 12)
                     pos += 16
@@ -208,6 +329,65 @@ object TiffParser {
                 if (tag == TAG_OPCODE_LIST1) list1Bytes = sizeBytes
                 if (tag == TAG_OPCODE_LIST2) list2Bytes = sizeBytes
                 if (tag == TAG_OPCODE_LIST3) list3Bytes = sizeBytes
+            }
+
+            // SOF3 scanning: for IFDs with compression=7 AND spp=2
+            var sof3ComponentMismatch = false
+            for (candidate in sof3Candidates) {
+                if (candidate.compression == 7 && candidate.spp == 2) {
+                    if (scanForSof3Mismatch(raf, candidate.stripOffset, MAX_SOF3_SCAN, candidate.spp, size)) {
+                        sof3ComponentMismatch = true
+                        break
+                    }
+                }
+            }
+
+            // Tile geometry
+            val totalTileOffsetsCount = tileOffsetsCountList.sum()
+            val totalTileByteCountsCount = tileByteCountsCountList.sum()
+            var expectedTileCount = 0
+            if (tileWidthsList.isNotEmpty() && tileHeightsList.isNotEmpty() && widths.isNotEmpty() && heights.isNotEmpty()) {
+                val tw = tileWidthsList[0]
+                val th = tileHeightsList[0]
+                if (tw > 0 && th > 0) {
+                    val w = widths.max()
+                    val h = heights.max()
+                    expectedTileCount = ceil(w.toDouble() / tw).toInt() * ceil(h.toDouble() / th).toInt()
+                }
+            }
+
+            val listBytesTotal = list1Bytes + list2Bytes + list3Bytes
+            val listBytesMax = max(list1Bytes, max(list2Bytes, list3Bytes))
+            val listPresentCount = (if (list1Bytes > 0) 1 else 0) +
+                (if (list2Bytes > 0) 1 else 0) +
+                (if (list3Bytes > 0) 1 else 0)
+
+            val totalPixels = clampToInt(maxWidth.toLong() * maxHeight.toLong())
+            val fileSize = clampToInt(size)
+            val bytesPerPixelMilli = if (totalPixels > 0) {
+                clampToInt(size * 1000L / totalPixels.toLong())
+            } else {
+                0
+            }
+            val pixelsPerMb = if (size > 0) {
+                clampToInt(totalPixels.toLong() * 1_000_000L / size)
+            } else {
+                0
+            }
+            val opcodeBytesRatioPermille = if (size > 0) {
+                clampToInt(listBytesTotal.toLong() * 1000L / size)
+            } else {
+                0
+            }
+            val opcodeBytesPerOpcodeMilli = if (totalOpcodes > 0) {
+                clampToInt(listBytesTotal.toLong() * 1000L / totalOpcodes.toLong())
+            } else {
+                0
+            }
+            val unknownOpcodeRatioPermille = if (totalOpcodes > 0) {
+                clampToInt(unknownOpcodes.toLong() * 1000L / totalOpcodes.toLong())
+            } else {
+                0
             }
 
             val (zipEocdNearEnd, zipLocalInTail) = zipPolyglotFlags(raf, size)
@@ -237,6 +417,21 @@ object TiffParser {
                 opcodeList1Bytes = list1Bytes,
                 opcodeList2Bytes = list2Bytes,
                 opcodeList3Bytes = list3Bytes,
+                maxWidth = maxWidth,
+                maxHeight = maxHeight,
+                totalPixels = totalPixels,
+                fileSize = fileSize,
+                bytesPerPixelMilli = bytesPerPixelMilli,
+                pixelsPerMb = pixelsPerMb,
+                opcodeListBytesTotal = listBytesTotal,
+                opcodeListBytesMax = listBytesMax,
+                opcodeListPresentCount = listPresentCount,
+                opcodeBytesRatioPermille = opcodeBytesRatioPermille,
+                opcodeBytesPerOpcodeMilli = opcodeBytesPerOpcodeMilli,
+                unknownOpcodeRatioPermille = unknownOpcodeRatioPermille,
+                hasOpcodeList1 = if (list1Bytes > 0) 1 else 0,
+                hasOpcodeList2 = if (list2Bytes > 0) 1 else 0,
+                hasOpcodeList3 = if (list3Bytes > 0) 1 else 0,
                 zipEocdNearEnd = zipEocdNearEnd,
                 zipLocalInTail = zipLocalInTail,
                 flagOpcodeAnomaly = flagOpcodeAnomaly,
@@ -245,8 +440,46 @@ object TiffParser {
                 flagDngJpegMismatch = flagDngJpegMismatch,
                 flagMagikaExtMismatch = flagMagikaExtMismatch,
                 flagAny = flagAny,
+                maxDeclaredOpcodeCount = maxDeclaredOpcodeCount,
+                compressionValues = compressionValues.toSet(),
+                sppValues = sppValues.toSet(),
+                sof3ComponentMismatch = sof3ComponentMismatch,
+                tileOffsetsCount = totalTileOffsetsCount,
+                tileByteCountsCount = totalTileByteCountsCount,
+                expectedTileCount = expectedTileCount,
+                tileWidths = tileWidthsList.toList(),
+                tileHeights = tileHeightsList.toList(),
             )
         }
+    }
+
+    private fun scanForSof3Mismatch(
+        raf: RandomAccessFile,
+        stripOffset: Long,
+        maxScan: Int,
+        expectedComponents: Int,
+        fileSize: Long
+    ): Boolean {
+        if (stripOffset >= fileSize || stripOffset < 0) return false
+        val scanLen = min(maxScan.toLong(), fileSize - stripOffset).toInt()
+        if (scanLen < 4) return false
+        val data = readBytes(raf, stripOffset, scanLen)
+        // Search for SOF3 marker: 0xFF 0xC3
+        var pos = 0
+        while (pos < data.size - 1) {
+            val idx = indexOf(data, byteArrayOf(0xFF.toByte(), 0xC3.toByte()), pos)
+            if (idx == -1) break
+            // SOF3 header: FF C3 Lh Ll P Y(2) X(2) Nf
+            // Nf (component count) at idx+9
+            if (idx + 10 <= data.size) {
+                val nf = data[idx + 9].toInt() and 0xFF
+                if (nf != expectedComponents) {
+                    return true
+                }
+            }
+            pos = idx + 2
+        }
+        return false
     }
 
     private fun emptyFeatures(): TiffFeatures {
@@ -264,6 +497,21 @@ object TiffParser {
             opcodeList1Bytes = 0,
             opcodeList2Bytes = 0,
             opcodeList3Bytes = 0,
+            maxWidth = 0,
+            maxHeight = 0,
+            totalPixels = 0,
+            fileSize = 0,
+            bytesPerPixelMilli = 0,
+            pixelsPerMb = 0,
+            opcodeListBytesTotal = 0,
+            opcodeListBytesMax = 0,
+            opcodeListPresentCount = 0,
+            opcodeBytesRatioPermille = 0,
+            opcodeBytesPerOpcodeMilli = 0,
+            unknownOpcodeRatioPermille = 0,
+            hasOpcodeList1 = 0,
+            hasOpcodeList2 = 0,
+            hasOpcodeList3 = 0,
             zipEocdNearEnd = 0,
             zipLocalInTail = 0,
             flagOpcodeAnomaly = 0,
@@ -272,6 +520,15 @@ object TiffParser {
             flagDngJpegMismatch = 0,
             flagMagikaExtMismatch = 0,
             flagAny = 0,
+            maxDeclaredOpcodeCount = 0,
+            compressionValues = emptySet(),
+            sppValues = emptySet(),
+            sof3ComponentMismatch = false,
+            tileOffsetsCount = 0,
+            tileByteCountsCount = 0,
+            expectedTileCount = 0,
+            tileWidths = emptyList(),
+            tileHeights = emptyList(),
         )
     }
 
@@ -391,6 +648,14 @@ object TiffParser {
             (buf[offset + 3].toInt() and 0xFF)
     }
 
+    private fun clampToInt(value: Long): Int {
+        return when {
+            value > Int.MAX_VALUE -> Int.MAX_VALUE
+            value < Int.MIN_VALUE -> Int.MIN_VALUE
+            else -> value.toInt()
+        }
+    }
+
     private fun zipPolyglotFlags(raf: RandomAccessFile, size: Long): Pair<Int, Int> {
         val tailWindow = 1024 * 1024
         val eocdTail = 65536
@@ -412,9 +677,9 @@ object TiffParser {
         return Pair(1, if (local != -1) 1 else 0)
     }
 
-    private fun indexOf(haystack: ByteArray, needle: ByteArray): Int {
+    private fun indexOf(haystack: ByteArray, needle: ByteArray, startFrom: Int = 0): Int {
         if (needle.isEmpty() || haystack.size < needle.size) return -1
-        outer@ for (i in 0..haystack.size - needle.size) {
+        outer@ for (i in startFrom..haystack.size - needle.size) {
             for (j in needle.indices) {
                 if (haystack[i + j] != needle[j]) continue@outer
             }

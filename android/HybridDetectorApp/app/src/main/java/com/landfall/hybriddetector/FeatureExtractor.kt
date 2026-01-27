@@ -35,6 +35,16 @@ class FeatureExtractor(
             return null
         }
         return try {
+            val tiff = TiffParser.parse(path)
+            extractFromParsed(tiff, path)
+        } catch (e: Exception) {
+            android.util.Log.w("HybridDetector", "Failed to extract features for $path: ${e.message}")
+            null
+        }
+    }
+
+    fun extractFromParsed(tiff: TiffFeatures, path: String): FloatArray? {
+        return try {
             val byteFeatures = when (bytesMode) {
                 "hist" -> extractBytesHist(path)
                 "raw" -> extractBytesRaw(path)
@@ -44,7 +54,6 @@ class FeatureExtractor(
                 }
             }
 
-            val tiff = TiffParser.parse(path)
             val structMap = tiff.toFeatureMap()
             val structFeatures = FloatArray(structFeatureNames.size)
             for (i in structFeatureNames.indices) {
