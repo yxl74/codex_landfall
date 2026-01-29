@@ -25,6 +25,12 @@ def main() -> None:
     ap.add_argument("--landfall-root", default="data/LandFall")
     ap.add_argument("--seed", type=int, default=1337)
     ap.add_argument("--holdout", type=int, default=500)
+    ap.add_argument(
+        "--holdout-mode",
+        choices=["random", "vendor"],
+        default="random",
+        help="How to create holdout split. 'vendor' reduces leakage for raw_pixls by holding out camera makers.",
+    )
     ap.add_argument("--out-train", default="outputs/dng_tagseq_train_list.txt")
     ap.add_argument("--out-holdout", default="outputs/dng_tagseq_holdout_list.txt")
     ap.add_argument("--out-landfall", default="outputs/dng_tagseq_landfall_list.txt")
@@ -45,9 +51,35 @@ def main() -> None:
         raise SystemExit("Not enough DNG files for requested holdout")
 
     random.seed(args.seed)
-    random.shuffle(dng_files)
-    holdout = sorted(dng_files[: args.holdout])
-    train = sorted(dng_files[args.holdout :])
+    if args.holdout_mode == "random":
+        random.shuffle(dng_files)
+        holdout = sorted(dng_files[: args.holdout])
+        train = sorted(dng_files[args.holdout :])
+    else:
+        # Group holdout by vendor to avoid splitting the same camera/model distribution
+        # across train/holdout. This is best-effort and relies on benign_root/raw_pixls/<vendor>/...
+        by_group = {}
+        for p in dng_files:
+            rel = Path(p).relative_to(benign_root)
+            parts = rel.parts
+            if len(parts) >= 2 and parts[0] == "raw_pixls":
+                group = f"raw_pixls/{parts[1]}"
+            else:
+                group = parts[0] if parts else "unknown"
+            by_group.setdefault(group, []).append(p)
+
+        groups = sorted(by_group.keys())
+        random.shuffle(groups)
+        holdout_groups = []
+        holdout_files: List[str] = []
+        for g in groups:
+            if len(holdout_files) >= args.holdout:
+                break
+            holdout_groups.append(g)
+            holdout_files.extend(by_group[g])
+
+        holdout = sorted(holdout_files)
+        train = sorted([p for g, files in by_group.items() if g not in holdout_groups for p in files])
 
     landfall = sorted(str(p) for p in landfall_root.rglob("*") if p.is_file())
 

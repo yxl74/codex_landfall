@@ -116,7 +116,7 @@ object TagSequenceExtractor {
                     val entryOff = entryBase + i * 12L
                     if (entryOff + 12 > size) break
                     val tag = readU16(raf, entryOff, order)
-                    val typeId = readU16(raf, entryOff + 2, order)
+                    val typeIdRaw = readU16(raf, entryOff + 2, order)
                     val valCountRaw = readU32(raf, entryOff + 4, order)
                     val valueOrOffsetRaw = readU32(raf, entryOff + 8, order)
                     val valCount = if (valCountRaw > Int.MAX_VALUE) Int.MAX_VALUE else valCountRaw.toInt()
@@ -125,7 +125,12 @@ object TagSequenceExtractor {
                         hasDng = true
                     }
 
-                    val typeSize = TYPE_SIZES[typeId] ?: 0
+                    // TIFF type IDs are defined in 1..12. Map unexpected values to a single UNK
+                    // bucket for the embedding to avoid a huge vocab while preserving a separate
+                    // "invalid" signal via typeNorm/typeMismatch.
+                    val typeId = if (typeIdRaw in 1..12) typeIdRaw else 13
+
+                    val typeSize = TYPE_SIZES[typeIdRaw] ?: 0
                     val byteCount = valCount.toLong() * typeSize.toLong()
                     val isImmediate = if (byteCount <= 4) 1.0f else 0.0f
                     val offsetNorm = if (byteCount > 4 && size > 0) {
@@ -154,9 +159,9 @@ object TagSequenceExtractor {
 
                     val isPointer = if (POINTER_TAGS.contains(tag)) 1.0f else 0.0f
                     val expected = EXPECTED_TYPES[tag]
-                    val typeMismatch = if (expected != null && !expected.contains(typeId)) 1.0f else 0.0f
+                    val typeMismatch = if (expected != null && !expected.contains(typeIdRaw)) 1.0f else 0.0f
 
-                    val typeNorm = clampFloat(typeId / 12.0f, 0.0f, 1.0f)
+                    val typeNorm = clampFloat(typeIdRaw / 12.0f, 0.0f, 1.0f)
                     val ifdKindNorm = clampFloat(ifdKind / 4.0f, 0.0f, 1.0f)
 
                     if (length < maxLen) {

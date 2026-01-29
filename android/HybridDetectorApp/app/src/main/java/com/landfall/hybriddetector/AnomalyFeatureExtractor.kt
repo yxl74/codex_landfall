@@ -50,7 +50,7 @@ class AnomalyFeatureExtractor(
 
             val structValues = HashMap<String, Float>()
             for ((k, v) in tiff.toFeatureMap()) {
-                structValues[k] = v.toFloat()
+                structValues[k] = if (k == "tile_count_ratio") (v.toFloat() / 1000.0f) else v.toFloat()
             }
 
             val file = java.io.File(path)

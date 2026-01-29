@@ -183,10 +183,16 @@ def parse_tag_sequence(path: str) -> Optional[TagSequence]:
                     if tag is None or type_id is None or val_count is None or value_or_offset is None:
                         continue
 
+                    # TIFF type IDs are defined in 1..12. In the wild (and especially when
+                    # parsers walk corrupted pointer graphs) you can see arbitrary 16-bit values.
+                    # For ML, mapping those to a single UNK bucket avoids exploding the embedding.
+                    type_id_raw = type_id
+                    type_id = type_id if 1 <= type_id <= 12 else 13
+
                     if tag == TAG_DNG_VERSION:
                         has_dng = True
 
-                    type_size = TIFF_TYPES.get(type_id, 0)
+                    type_size = TIFF_TYPES.get(type_id_raw, 0)
                     byte_count = val_count * type_size
                     is_immediate = 1.0 if byte_count <= 4 else 0.0
                     offset_norm = 0.0
@@ -213,10 +219,10 @@ def parse_tag_sequence(path: str) -> Optional[TagSequence]:
 
                     expected = EXPECTED_TYPES.get(tag)
                     type_mismatch = 0.0
-                    if expected is not None and type_id not in expected:
+                    if expected is not None and type_id_raw not in expected:
                         type_mismatch = 1.0
 
-                    type_norm = clamp(type_id / 12.0, 0.0, 1.0)
+                    type_norm = clamp(type_id_raw / 12.0, 0.0, 1.0)
                     ifd_kind_norm = clamp(ifd_kind / 4.0, 0.0, 1.0)
 
                     tag_ids.append(tag)

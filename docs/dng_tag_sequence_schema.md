@@ -84,7 +84,7 @@ python3 analysis/tag_sequence_extract.py \
 NPZ fields:
 - `features`: float32, shape `(N, max_len, 12)`
 - `tag_ids`: int32, shape `(N, max_len)`
-- `type_ids`: int32, shape `(N, max_len)`
+- `type_ids`: int32, shape `(N, max_len)` (TIFF types 1..12, unknown mapped to 13; 0 is padding)
 - `ifd_kinds`: int32, shape `(N, max_len)`
 - `lengths`: int32, shape `(N,)`
 - `labels`: string labels inferred from path

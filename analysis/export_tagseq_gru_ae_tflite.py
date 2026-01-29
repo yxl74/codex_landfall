@@ -14,7 +14,8 @@ def main() -> None:
     ap.add_argument("--out", default="outputs/tagseq_gru_ae.tflite")
     args = ap.parse_args()
 
-    model = tf.keras.models.load_model(args.keras)
+    # These models are trained locally; allow loading Lambda-free and (older) Lambda-based artifacts.
+    model = tf.keras.models.load_model(args.keras, safe_mode=False)
     converter = tf.lite.TFLiteConverter.from_keras_model(model)
     converter.target_spec.supported_ops = [
         tf.lite.OpsSet.TFLITE_BUILTINS,

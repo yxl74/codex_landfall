@@ -44,6 +44,14 @@
     256,
     64
   ],
+  "train_scope": "tiff_non_dng",
+  "counts": {
+    "total_in_scope": 2950,
+    "benign_in_scope": 2855,
+    "mal_in_scope": 95,
+    "train_benign": 2001,
+    "val_benign": 430
+  },
   "threshold_percentile": 97.0,
-  "threshold": 2.509592113494871
+  "threshold": 3.5125738286972044
 }

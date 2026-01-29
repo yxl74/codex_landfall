@@ -2,6 +2,10 @@
 
 ## 1. Overview
 
+> This file contains a mix of current architecture notes and legacy experiment history.
+> For the **current training/export pipeline** (what’s actually shipped in the Android app), see:
+> `docs/training_pipeline.md`.
+
 LandFall Detector is a defensive security system for detecting malicious TIFF/DNG files on Android devices. It combines deterministic CVE-pattern rules with an ensemble of machine learning models to identify both known exploit patterns (e.g., CVE-2025-21043, CVE-2025-43300) and novel structural anomalies in image files.
 
 The system is built around a **two-tier detection architecture**:
@@ -31,18 +35,25 @@ The CVE rule engine (`CveDetector.kt`) evaluates pre-parsed TIFF structural feat
 
 Unit tests: `analysis/test_cve_rules.py` (11 tests covering all rules and edge cases).
 
-### 2.2 Tier 2: ML Ensemble
+### 2.2 Tier 2: ML Anomaly Detectors
 
-Four models provide overlapping coverage:
+The Android app deploys three benign-only anomaly detectors (one per file family), routed by Magika:
 
 | Model | Type | Input Dims | Scope | Role |
 |-------|------|-----------|-------|------|
-| Hybrid LR | Supervised logistic regression | 539 | All TIFF | Primary classifier (byte histograms + structure) |
-| Anomaly AE | Unsupervised autoencoder | 550 | All TIFF | Reconstruction-error anomaly detector |
+| TIFF AE | Unsupervised autoencoder | 550 | All TIFF | Reconstruction-error anomaly detector (primary for non-DNG TIFF) |
 | TagSeq GRU-AE | Unsupervised GRU autoencoder | 512 x 12 | DNG only | Tag-sequence anomaly detector |
+| JPEG AE | Unsupervised autoencoder | 35 | JPEG only | JPEG structural anomaly detector |
 | Magika | Supervised DNN (Google) | 512 x 257 | All files | File-type identification |
 
-**Decision logic** (single-file mode): A file is flagged MALICIOUS if `hybrid_score >= 0.20` OR `anomaly_score >= threshold`. TagSeq and Magika provide supplementary signals displayed in the UI but do not currently participate in the binary decision.
+**Decision logic** (single-file mode):
+
+- **If Magika predicts `jpeg`**: run JPEG AE and flag MALICIOUS if `jpeg_score >= threshold`.
+- **If Magika predicts `tiff`**:
+  - Run Tier 1 CVE rules first; any CVE hit is MALICIOUS.
+  - If the file is detected as DNG (via TagSeq parsing), use TagSeq GRU-AE and flag MALICIOUS if `tagseq_score >= threshold`.
+  - Otherwise, use TIFF AE and flag MALICIOUS if `tiff_ae_score >= threshold`.
+  - If DNG is suspected but TagSeq parsing/inference fails, fall back to TIFF AE.
 
 ---
 
@@ -184,7 +195,7 @@ Sequences are zero-padded or truncated to 512 entries.
 
 ## 5. Model Architectures
 
-### 5.1 Hybrid Logistic Regression
+### 5.1 Hybrid Logistic Regression (Legacy / Not Deployed)
 
 - **Input**: 539 floats (514 byte histogram + 25 structural)
 - **Architecture**: Single-layer logistic regression (sigmoid output)
@@ -193,7 +204,7 @@ Sequences are zero-padded or truncated to 512 entries.
 - **Output**: Probability of malicious class
 - **Export**: `convert_to_tflite.py` creates TFLite graph with embedded log1p mask and z-score normalization
 
-Training script: `analysis/train_hybrid.py`
+Training script: `analysis/train_hybrid.py` (kept for research; not used by the Android app)
 
 ### 5.2 Anomaly Autoencoder
 
@@ -338,35 +349,35 @@ All models achieve 100% recall on LandFall samples, with high-confidence scores:
 
 ### 8.1 App Structure
 
-The Android app (`android/HybridDetectorApp/`) is a native Kotlin application targeting Android API 21+.
+The Android app (`android/HybridDetectorApp/`) is a native Kotlin application targeting Android API 26+.
 
-**Kotlin classes** (13 files in `com.landfall.hybriddetector`):
+**Kotlin classes** (14 files in `com.landfall.hybriddetector`):
 
 | Class | Role |
 |-------|------|
 | `MainActivity` | UI, file selection, benchmark mode, orchestration |
 | `TiffParser` | Binary TIFF/DNG parser — IFD traversal, tag extraction, opcode parsing |
 | `CveDetector` | Tier 1 CVE rule evaluation |
-| `FeatureExtractor` | Hybrid model feature extraction (byte histogram + structural) |
-| `ModelRunner` | Hybrid LR TFLite inference |
-| `AttributionModel` | Feature contribution analysis for hybrid model |
-| `AnomalyFeatureExtractor` | Anomaly AE feature extraction |
-| `AnomalyModelRunner` | Anomaly AE TFLite inference |
-| `AnomalyMeta` | Anomaly model metadata loader |
+| `AnomalyFeatureExtractor` | TIFF AE feature extraction |
+| `AnomalyModelRunner` | TIFF AE TFLite inference |
+| `AnomalyMeta` | TIFF AE metadata loader |
 | `TagSequenceExtractor` | DNG tag-sequence extraction |
 | `TagSeqModelRunner` | TagSeq GRU-AE TFLite inference (Flex delegate) |
 | `TagSeqMeta` | TagSeq model metadata loader |
+| `JpegParser` | JPEG structural parser |
+| `JpegFeatureExtractor` | JPEG AE feature extraction |
+| `JpegModelRunner` | JPEG AE TFLite inference |
+| `JpegMeta` | JPEG AE metadata loader |
 | `MagikaModelRunner` | Google Magika file-type classification |
 
 ### 8.2 Assets
 
 | File | Size | Description |
 |------|------|-------------|
-| `hybrid_model.tflite` | 11 KB | Hybrid LR with embedded preprocessing |
-| `hybrid_model_params.json` | 37 KB | Weights/bias for attribution model |
-| `hybrid_model_meta.json` | 673 B | Feature names and dimensions |
 | `anomaly_ae.tflite` | 346 KB | Anomaly AE with embedded preprocessing |
 | `anomaly_model_meta.json` | 1.1 KB | Feature names, architecture, threshold |
+| `jpeg_ae.tflite` | 11 KB | JPEG AE with embedded preprocessing |
+| `jpeg_model_meta.json` | 1.1 KB | JPEG feature names, architecture, threshold |
 | `tagseq_gru_ae.tflite` | 5.7 MB | TagSeq GRU-AE (requires Flex delegate) |
 | `tagseq_gru_ae_meta.json` | 165 B | Sequence length, feature dim, threshold |
 | `magika/` | — | Google Magika model and config |
@@ -380,6 +391,17 @@ User selects file via SAF picker
 Copy to cache (avoid repeated content-resolver reads)
   |
   v
+MagikaModelRunner.classify(path) → file-type label
+  |
+  v
+Branch by type:
+  +-- jpeg → JPEG parser/features → JPEG AE → jpeg score
+  |
+  +-- tiff → continue
+  |
+  +-- other → skip
+  |
+  v
 TiffParser.parse(path) → TiffFeatures
   |
   v
@@ -388,14 +410,14 @@ TIER 1: CveDetector.evaluate(features)
   +-- CVE hit? → Display "MALICIOUS (CVE rule match)", skip ML
   |
   v (no CVE hit)
-TIER 2: Run ML models in parallel:
-  |- FeatureExtractor.extractFromParsed() → ModelRunner.predict()      → hybrid score
-  |- AnomalyFeatureExtractor.extractFromParsed() → AnomalyRunner.predict() → anomaly score
-  |- MagikaModelRunner.classify()                                       → file-type label
+TIER 2: Run ML models:
   |- TagSequenceExtractor.extract() → TagSeqRunner.predict()           → tagseq score (DNG only)
+  |- AnomalyFeatureExtractor.extractFromParsed() → AnomalyRunner.predict() → tiff_ae score (non-DNG TIFF)
   |
   v
-Decision: hybrid_score >= 0.20 OR anomaly_score >= threshold → MALICIOUS
+Decision:
+  - DNG: tagseq_score >= threshold → MALICIOUS
+  - non-DNG TIFF: tiff_ae_score >= threshold → MALICIOUS
 ```
 
 ### 8.4 Benchmark Mode
@@ -536,11 +558,6 @@ python3 analysis/train_hybrid.py \
 ### 10.3 TFLite Export
 
 ```bash
-.venv-tf/bin/python3 analysis/convert_to_tflite.py \
-  --model-npz outputs/hybrid_model.npz \
-  --output-tflite outputs/hybrid_model.tflite \
-  --output-meta outputs/hybrid_model_meta.json
-
 .venv-tf/bin/python3 analysis/export_anomaly_ae_tflite.py \
   --input-npz outputs/anomaly_features.npz \
   --output-tflite outputs/anomaly_ae.tflite \
@@ -551,11 +568,12 @@ python3 analysis/train_hybrid.py \
 ### 10.4 Deploy to Android
 
 ```bash
-cp outputs/hybrid_model.tflite android/HybridDetectorApp/app/src/main/assets/
 cp outputs/anomaly_ae.tflite android/HybridDetectorApp/app/src/main/assets/
 cp outputs/anomaly_model_meta.json android/HybridDetectorApp/app/src/main/assets/
-cp outputs/hybrid_model_meta.json android/HybridDetectorApp/app/src/main/assets/
 cp outputs/tagseq_gru_ae.tflite android/HybridDetectorApp/app/src/main/assets/
+cp outputs/tagseq_gru_ae_meta.json android/HybridDetectorApp/app/src/main/assets/
+cp outputs/jpeg_ae.tflite android/HybridDetectorApp/app/src/main/assets/
+cp outputs/jpeg_model_meta.json android/HybridDetectorApp/app/src/main/assets/
 ```
 
 ### 10.5 Unit Tests

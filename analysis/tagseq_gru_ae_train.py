@@ -42,6 +42,9 @@ def build_model(
         mask_zero=True,
         name="tag_emb",
     )(tag_in)
+    # Explicit mask: padding uses tag_id=0. Don't rely on mask propagation through
+    # concatenation; pass the tag embedding mask directly to the encoder GRU.
+    seq_mask = tag_emb._keras_mask
     type_emb = tf.keras.layers.Embedding(
         type_vocab,
         type_emb_dim,
@@ -61,7 +64,7 @@ def build_model(
         gru_units,
         return_state=True,
         name="encoder_gru",
-    )(merged)
+    )(merged, mask=seq_mask)
     latent = tf.keras.layers.Dense(latent_dim, activation="tanh", name="latent")(state)
 
     repeated = tf.keras.layers.RepeatVector(max_len, name="repeat")(latent)

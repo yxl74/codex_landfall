@@ -135,12 +135,39 @@ def build_autoencoder(input_dim: int, hidden: List[int]) -> tf.keras.Model:
     return tf.keras.Model(inputs=inputs, outputs=outputs, name="ae_core")
 
 
+def tflite_predict_batch(tflite_model: bytes, X_raw: np.ndarray, batch_size: int = 256) -> np.ndarray:
+    interpreter = tf.lite.Interpreter(model_content=tflite_model)
+    interpreter.allocate_tensors()
+    in0 = interpreter.get_input_details()[0]
+    out0 = interpreter.get_output_details()[0]
+
+    in_idx = int(in0["index"])
+    out_idx = int(out0["index"])
+
+    scores: List[float] = []
+    for i in range(0, X_raw.shape[0], batch_size):
+        chunk = X_raw[i : i + batch_size]
+        for row in chunk:
+            x = row.astype(np.float32, copy=False)[None, :]
+            interpreter.set_tensor(in_idx, x)
+            interpreter.invoke()
+            y = interpreter.get_tensor(out_idx)
+            scores.append(float(np.ravel(y)[0]))
+    return np.array(scores, dtype=np.float32)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input-npz", default="outputs/anomaly_features.npz")
     parser.add_argument("--output-tflite", default="outputs/anomaly_ae.tflite")
     parser.add_argument("--output-meta", default="outputs/anomaly_model_meta.json")
     parser.add_argument("--bytes-mode", choices=["raw", "hist"], default="hist")
+    parser.add_argument(
+        "--train-scope",
+        choices=["all_tiff", "tiff_non_dng"],
+        default="tiff_non_dng",
+        help="Which benign scope to learn. DNG is routed to TagSeq GRU-AE on device.",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--split", default="0.7,0.15,0.15")
     parser.add_argument("--epochs", type=int, default=40)
@@ -162,7 +189,32 @@ def main() -> int:
     paths = data["paths"]
     struct_names = [str(x) for x in data["struct_feature_names"]]
 
+    # Filter to TIFF scope *before* dedup-by-hash to avoid hashing large out-of-scope
+    # raw files (especially DNG) during general TIFF training.
+    try:
+        idx_is_tiff = struct_names.index("is_tiff")
+        idx_is_dng = struct_names.index("is_dng")
+    except ValueError as exc:
+        raise SystemExit("Missing required struct features: is_tiff / is_dng") from exc
+
+    is_tiff = X_struct[:, idx_is_tiff].astype(np.int64)
+    is_dng = X_struct[:, idx_is_dng].astype(np.int64)
+    if args.train_scope == "tiff_non_dng":
+        scope_mask = (is_tiff == 1) & (is_dng == 0)
+    else:
+        scope_mask = is_tiff == 1
+
+    scope_idx = np.where(scope_mask)[0]
+    if scope_idx.size == 0:
+        raise SystemExit(f"No TIFF samples for scope={args.train_scope}")
+
+    X_bytes = X_bytes[scope_idx]
+    X_struct = X_struct[scope_idx]
+    labels = labels[scope_idx]
+    paths = paths[scope_idx]
+
     X_bytes, X_struct, labels, paths = deduplicate_by_hash(paths, X_bytes, X_struct, labels)
+    is_dng = X_struct[:, idx_is_dng].astype(np.int64)
 
     X_bytes_feat = magika_bytes_to_features(X_bytes, args.bytes_mode)
     X_raw = np.concatenate([X_bytes_feat, X_struct], axis=1).astype(np.float32)
@@ -176,10 +228,15 @@ def main() -> int:
         X_log[:, log_idx] = np.log1p(X_log[:, log_idx])
 
     n = X_log.shape[0]
-    train_idx, val_idx, _ = split_indices(n, args.seed, splits)
+    train_idx, val_idx, test_idx = split_indices(n, args.seed, splits)
     benign_mask = labels == "benign"
+    if args.train_scope == "tiff_non_dng":
+        # Enforce non-DNG in training split, even if a future pipeline accidentally
+        # includes DNG samples in the scope arrays.
+        benign_mask = benign_mask & (is_dng == 0)
     train_benign_idx = train_idx[benign_mask[train_idx]]
     val_benign_idx = val_idx[benign_mask[val_idx]]
+    test_benign_idx = test_idx[benign_mask[test_idx]]
     if train_benign_idx.size == 0:
         raise SystemExit("No benign samples in training split.")
 
@@ -205,7 +262,6 @@ def main() -> int:
 
     recon = ae.predict(X_norm, batch_size=args.batch_size, verbose=0)
     errors = np.mean((X_norm - recon) ** 2, axis=1)
-    threshold = float(np.percentile(errors[val_benign_idx], args.threshold_percentile))
 
     inputs = tf.keras.Input(shape=(X_raw.shape[1],), name="features_raw")
     mask_tf = tf.constant(log_mask, dtype=tf.float32)
@@ -225,6 +281,22 @@ def main() -> int:
     converter.optimizations = [tf.lite.Optimize.DEFAULT]
     tflite_model = converter.convert()
 
+    # Calibrate threshold using the exported TFLite model output to match on-device scoring.
+    tflite_scores_val = tflite_predict_batch(tflite_model, X_raw[val_benign_idx])
+    threshold = float(np.percentile(tflite_scores_val, args.threshold_percentile))
+
+    tflite_scores_test_ben = (
+        tflite_predict_batch(tflite_model, X_raw[test_benign_idx]) if test_benign_idx.size else np.array([], dtype=np.float32)
+    )
+    fpr_test = float(np.mean(tflite_scores_test_ben >= threshold)) if tflite_scores_test_ben.size else 0.0
+
+    mal_mask = labels != "benign"
+    test_mal_idx = test_idx[mal_mask[test_idx]]
+    tflite_scores_test_mal = (
+        tflite_predict_batch(tflite_model, X_raw[test_mal_idx]) if test_mal_idx.size else np.array([], dtype=np.float32)
+    )
+    mal_recall_test = float(np.mean(tflite_scores_test_mal >= threshold)) if tflite_scores_test_mal.size else 0.0
+
     os.makedirs(os.path.dirname(args.output_tflite), exist_ok=True)
     with open(args.output_tflite, "wb") as f:
         f.write(tflite_model)
@@ -235,6 +307,14 @@ def main() -> int:
         "bytes_mode": args.bytes_mode,
         "struct_feature_names": struct_names,
         "hidden": hidden,
+        "train_scope": args.train_scope,
+        "counts": {
+            "total_in_scope": int(X_raw.shape[0]),
+            "benign_in_scope": int(np.sum(labels == "benign")),
+            "mal_in_scope": int(np.sum(labels != "benign")),
+            "train_benign": int(train_benign_idx.size),
+            "val_benign": int(val_benign_idx.size),
+        },
         "threshold_percentile": args.threshold_percentile,
         "threshold": threshold,
     }
@@ -245,6 +325,8 @@ def main() -> int:
     print("Wrote:", args.output_tflite)
     print("Wrote:", args.output_meta)
     print(f"Threshold (p{args.threshold_percentile:.1f}) = {threshold:.6f}")
+    print(f"Test benign FPR (TFLite @thr): {fpr_test * 100:.2f}% (n={tflite_scores_test_ben.size})")
+    print(f"Test mal recall (TFLite @thr): {mal_recall_test * 100:.2f}% (n={tflite_scores_test_mal.size})")
     return 0
 
 

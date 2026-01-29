@@ -1,8 +1,17 @@
 {
   "model": "tagseq_gru_ae",
-  "threshold": 0.741898147463798,
+  "threshold": 0.7188834279775618,
   "threshold_percentile": 99.0,
   "max_seq_len": 512,
   "feature_dim": 12,
-  "requires_flex": true
+  "requires_flex": true,
+  "calibration": {
+    "holdout_npz": "outputs/tagseq_dng_holdout.npz",
+    "holdout_fpr": 0.01,
+    "holdout_mean": 0.21225327253341675,
+    "holdout_p95": 0.320398333668707,
+    "landfall_npz": "outputs/tagseq_dng_landfall.npz",
+    "landfall_recall": 1.0,
+    "landfall_mean": 2.5351712703704834
+  }
 }

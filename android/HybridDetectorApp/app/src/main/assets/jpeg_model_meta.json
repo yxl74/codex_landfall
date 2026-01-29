@@ -1,0 +1,60 @@
+{
+  "model": "jpeg_autoencoder_anomaly_score",
+  "feature_dim": 35,
+  "struct_feature_names": [
+    "file_size",
+    "has_eoi",
+    "bytes_after_eoi",
+    "bytes_after_eoi_ratio_permille",
+    "tail_zip_magic",
+    "tail_pdf_magic",
+    "tail_elf_magic",
+    "invalid_len",
+    "width",
+    "height",
+    "components",
+    "precision",
+    "dri_interval",
+    "app_count",
+    "app_bytes",
+    "app_bytes_ratio_permille",
+    "app_max_len",
+    "com_count",
+    "com_bytes",
+    "dqt_count",
+    "dqt_bytes",
+    "dqt_bytes_ratio_permille",
+    "dqt_max_len",
+    "dht_count",
+    "dht_bytes",
+    "dht_bytes_ratio_permille",
+    "dht_max_len",
+    "sof0_count",
+    "sof2_count",
+    "sos_count",
+    "max_seg_len",
+    "dqt_tables",
+    "dqt_invalid",
+    "dht_tables",
+    "dht_invalid"
+  ],
+  "hidden": [
+    32,
+    8
+  ],
+  "threshold_percentile": 99.0,
+  "threshold": 0.34638981401920316,
+  "seed": 42,
+  "split": [
+    0.8,
+    0.1,
+    0.1
+  ],
+  "eval": {
+    "benign_test_fpr": 0.01391304347826087,
+    "malware_recall": 1.0,
+    "benign_count": 17242,
+    "benign_aug_count": 17242,
+    "malware_count": 96
+  }
+}

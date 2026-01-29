@@ -4,96 +4,122 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
-import android.os.Environment
 import android.os.Bundle
+import android.os.Environment
 import android.os.SystemClock
-import android.util.Log
-import android.view.View
-import android.widget.Button
-import android.widget.TextView
 import android.provider.OpenableColumns
+import android.provider.Settings
+import android.util.Log
+import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import android.provider.Settings
-import androidx.activity.result.contract.ActivityResultContracts
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.chip.Chip
 import java.io.File
 import java.io.FileOutputStream
 
 class MainActivity : AppCompatActivity() {
-    companion object {
-        private const val MODEL_THRESHOLD = 0.20f
+    private enum class ChipState {
+        NEUTRAL,
+        OK,
+        BAD,
     }
 
-    private lateinit var summaryView: TextView
     private lateinit var statusView: TextView
-    private lateinit var cveResultView: TextView
-    private lateinit var hybridResultView: TextView
-    private lateinit var anomalyResultView: TextView
-    private lateinit var magikaResultView: TextView
-    private lateinit var tagseqResultView: TextView
-    private lateinit var hybridDetailView: TextView
-    private lateinit var anomalyDetailView: TextView
+    private lateinit var fileNameView: TextView
+    private lateinit var fileMetaView: TextView
+
+    private lateinit var magikaTypeChip: Chip
+    private lateinit var magikaScoreChip: Chip
     private lateinit var magikaDetailView: TextView
-    private lateinit var tagseqDetailView: TextView
-    private lateinit var runButton: Button
-    private lateinit var selectButton: Button
-    private lateinit var modelRunner: ModelRunner
-    private lateinit var extractor: FeatureExtractor
-    private lateinit var attributionModel: AttributionModel
-    private lateinit var anomalyExtractor: AnomalyFeatureExtractor
-    private lateinit var anomalyRunner: AnomalyModelRunner
-    private lateinit var anomalyMeta: AnomalyMeta
-    private lateinit var magikaRunner: MagikaModelRunner
+
+    private lateinit var routeChip: Chip
+    private lateinit var cveChip: Chip
+    private lateinit var dngChip: Chip
+    private lateinit var engineChip: Chip
+    private lateinit var engineScoreView: TextView
+    private lateinit var engineDetailView: TextView
+
+    private lateinit var verdictView: TextView
+    private lateinit var verdictDetailView: TextView
+    private lateinit var summaryView: TextView
+
+    private lateinit var selectButton: MaterialButton
+    private lateinit var runButton: MaterialButton
+    private lateinit var sampleButton: MaterialButton
+
+    private lateinit var tiffAeMeta: AnomalyMeta
+    private lateinit var tiffAeExtractor: AnomalyFeatureExtractor
+    private lateinit var tiffAeRunner: AnomalyModelRunner
+
     private lateinit var tagSeqMeta: TagSeqMeta
     private lateinit var tagSeqRunner: TagSeqModelRunner
+
+    private lateinit var jpegMeta: JpegMeta
+    private lateinit var jpegExtractor: JpegFeatureExtractor
+    private lateinit var jpegRunner: JpegModelRunner
+
+    private lateinit var magikaRunner: MagikaModelRunner
+
     private val pickFileLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            handleSelectedUri(uri)
-        }
+        if (uri != null) handleSelectedUri(uri)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        summaryView = findViewById(R.id.summaryView)
         statusView = findViewById(R.id.statusView)
-        cveResultView = findViewById(R.id.cveResultView)
-        hybridResultView = findViewById(R.id.hybridResultView)
-        anomalyResultView = findViewById(R.id.anomalyResultView)
-        magikaResultView = findViewById(R.id.magikaResultView)
-        tagseqResultView = findViewById(R.id.tagseqResultView)
-        hybridDetailView = findViewById(R.id.hybridDetailView)
-        anomalyDetailView = findViewById(R.id.anomalyDetailView)
+        fileNameView = findViewById(R.id.fileNameView)
+        fileMetaView = findViewById(R.id.fileMetaView)
+
+        magikaTypeChip = findViewById(R.id.magikaTypeChip)
+        magikaScoreChip = findViewById(R.id.magikaScoreChip)
         magikaDetailView = findViewById(R.id.magikaDetailView)
-        tagseqDetailView = findViewById(R.id.tagseqDetailView)
-        runButton = findViewById(R.id.runButton)
+
+        routeChip = findViewById(R.id.routeChip)
+        cveChip = findViewById(R.id.cveChip)
+        dngChip = findViewById(R.id.dngChip)
+        engineChip = findViewById(R.id.engineChip)
+        engineScoreView = findViewById(R.id.engineScoreView)
+        engineDetailView = findViewById(R.id.engineDetailView)
+
+        verdictView = findViewById(R.id.verdictView)
+        verdictDetailView = findViewById(R.id.verdictDetailView)
+        summaryView = findViewById(R.id.summaryView)
+
         selectButton = findViewById(R.id.selectButton)
+        runButton = findViewById(R.id.runButton)
+        sampleButton = findViewById(R.id.sampleButton)
 
-        updateStatus("Status: --", R.color.status_neutral)
-        cveResultView.visibility = View.GONE
-        updateResult(hybridResultView, "Hybrid: --", R.color.status_neutral)
-        updateResult(anomalyResultView, "Anomaly AE: --", R.color.status_neutral)
-        updateResult(magikaResultView, "Magika: --", R.color.status_neutral)
-        updateResult(tagseqResultView, "TagSeq GRU-AE: --", R.color.status_neutral)
-        updateResult(hybridDetailView, "Hybrid details...", R.color.status_neutral)
-        updateResult(anomalyDetailView, "Anomaly details...", R.color.status_neutral)
-        updateResult(magikaDetailView, "Magika details...", R.color.status_neutral)
-        updateResult(tagseqDetailView, "TagSeq details...", R.color.status_neutral)
-
-        modelRunner = ModelRunner.fromAssets(this)
-        extractor = FeatureExtractor.fromAssets(this)
-        attributionModel = AttributionModel.fromAssets(this)
-        anomalyMeta = AnomalyMeta.fromAssets(this)
-        anomalyExtractor = AnomalyFeatureExtractor.fromMeta(anomalyMeta)
-        anomalyRunner = AnomalyModelRunner.fromAssets(this, anomalyMeta.threshold)
         magikaRunner = MagikaModelRunner.fromAssets(this)
+
+        tiffAeMeta = AnomalyMeta.fromAssets(this)
+        tiffAeExtractor = AnomalyFeatureExtractor.fromMeta(tiffAeMeta)
+        tiffAeRunner = AnomalyModelRunner.fromAssets(this, tiffAeMeta.threshold)
+
         tagSeqMeta = TagSeqMeta.fromAssets(this)
         tagSeqRunner = TagSeqModelRunner.fromAssets(this, tagSeqMeta)
 
+        jpegMeta = JpegMeta.fromAssets(this)
+        jpegExtractor = JpegFeatureExtractor.fromMeta(jpegMeta)
+        jpegRunner = JpegModelRunner.fromAssets(this, jpegMeta.threshold)
+
+        resetUi()
+
         selectButton.setOnClickListener {
             pickFileLauncher.launch(arrayOf("*/*"))
+        }
+
+        sampleButton.setOnClickListener {
+            if (hasStoragePermission()) {
+                showSamplePicker()
+            } else {
+                requestStoragePermission()
+            }
         }
 
         runButton.setOnClickListener {
@@ -104,13 +130,680 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        if (!hasStoragePermission()) {
-            requestStoragePermission()
-        }
-
         if (intent.getBooleanExtra("auto", false) && (hasStoragePermission() || hasLocalBenchList())) {
             runBenchmark()
         }
+    }
+
+    private fun resetUi() {
+        updateStatus("Ready", R.color.status_neutral)
+        fileNameView.text = "No file selected"
+        fileMetaView.text = "—"
+
+        setChip(magikaTypeChip, "type: —", ChipState.NEUTRAL)
+        setChip(magikaScoreChip, "score: —", ChipState.NEUTRAL)
+        magikaDetailView.text = "—"
+
+        setChip(routeChip, "route: —", ChipState.NEUTRAL)
+        setChip(cveChip, "CVE: —", ChipState.NEUTRAL)
+        setChip(dngChip, "DNG: —", ChipState.NEUTRAL)
+        setChip(engineChip, "engine: —", ChipState.NEUTRAL)
+
+        engineScoreView.text = "—"
+        engineDetailView.text = "—"
+
+        verdictView.text = "—"
+        verdictView.setTextColor(ContextCompat.getColor(this, R.color.status_neutral))
+        verdictDetailView.text = "—"
+
+        summaryView.text = "—"
+    }
+
+    private fun setChip(chip: Chip, text: String, state: ChipState) {
+        chip.text = text
+        when (state) {
+            ChipState.NEUTRAL -> {
+                chip.setChipBackgroundColorResource(R.color.chip_neutral_bg)
+                chip.setTextColor(ContextCompat.getColor(this, R.color.chip_neutral_text))
+            }
+            ChipState.OK -> {
+                chip.setChipBackgroundColorResource(R.color.status_benign)
+                chip.setTextColor(ContextCompat.getColor(this, android.R.color.white))
+            }
+            ChipState.BAD -> {
+                chip.setChipBackgroundColorResource(R.color.status_malicious)
+                chip.setTextColor(ContextCompat.getColor(this, android.R.color.white))
+            }
+        }
+    }
+
+    private fun handleSelectedUri(uri: Uri) {
+        resetUi()
+
+        val displayName = queryDisplayName(uri)
+        val cached = copyToCache(uri, displayName)
+        if (cached == null) {
+            updateStatus("Failed to read selection", R.color.status_malicious)
+            return
+        }
+
+        fileNameView.text = displayName ?: cached.name
+        fileMetaView.text = "${cached.length()} bytes • cache: ${cached.absolutePath}"
+
+        scanSingleFile(cached.absolutePath, displayName ?: cached.name)
+    }
+
+    private fun scanSingleFile(path: String, displayName: String) {
+        Thread {
+            runOnUiThread {
+                updateStatus("Scanning…", R.color.status_neutral)
+                setChip(routeChip, "route: —", ChipState.NEUTRAL)
+                setChip(cveChip, "CVE: —", ChipState.NEUTRAL)
+                setChip(dngChip, "DNG: —", ChipState.NEUTRAL)
+                setChip(engineChip, "engine: —", ChipState.NEUTRAL)
+                engineScoreView.text = "—"
+                engineDetailView.text = "—"
+                verdictView.text = "—"
+                verdictView.setTextColor(ContextCompat.getColor(this, R.color.status_neutral))
+                verdictDetailView.text = "—"
+                summaryView.text = "—"
+            }
+
+            val m0 = SystemClock.elapsedRealtimeNanos()
+            val magika = magikaRunner.classify(path)
+            val m1 = SystemClock.elapsedRealtimeNanos()
+            val magikaMs = (m1 - m0) / 1_000_000.0
+
+            val magikaType = magika?.outputLabel?.lowercase() ?: "unknown"
+            val expectedType = expectedTypeFromName(displayName)
+
+            runOnUiThread {
+                setChip(magikaTypeChip, "type: $magikaType", ChipState.NEUTRAL)
+                val scoreText = if (magika != null) String.format("score: %.3f", magika.score) else "score: —"
+                setChip(magikaScoreChip, scoreText, ChipState.NEUTRAL)
+                magikaDetailView.text = if (magika != null) {
+                    "dlLabel=${magika.dlLabel} • outputLabel=${magika.outputLabel} • time=${"%.2f".format(magikaMs)}ms"
+                } else {
+                    "Magika: FAIL"
+                }
+            }
+
+            if (expectedType != "unknown" && !isTypeCompatible(expectedType, magikaType)) {
+                renderTypeMismatch(path, displayName, expectedType, magikaType, magikaMs)
+                return@Thread
+            }
+
+            when (magikaType) {
+                "jpeg" -> scanJpeg(path, displayName)
+                "tiff" -> scanTiff(path, displayName)
+                else -> renderUnsupported(path, displayName, magikaType, magikaMs)
+            }
+        }.start()
+    }
+
+    private fun expectedTypeFromName(nameOrPath: String?): String {
+        if (nameOrPath.isNullOrBlank()) return "unknown"
+        val dot = nameOrPath.lastIndexOf('.')
+        if (dot == -1 || dot == nameOrPath.length - 1) return "unknown"
+        val ext = nameOrPath.substring(dot + 1).lowercase()
+        return when (ext) {
+            "jpg", "jpeg" -> "jpeg"
+            "tif", "tiff" -> "tiff"
+            "dng" -> "dng"
+            else -> "unknown"
+        }
+    }
+
+    private fun isTypeCompatible(expected: String, magika: String): Boolean {
+        if (expected == "unknown") return true
+        if (magika == "unknown") return false
+        val allowed = when (expected) {
+            "jpeg" -> setOf("jpeg")
+            // DNG is TIFF; accept either label.
+            "tiff" -> setOf("tiff", "dng")
+            "dng" -> setOf("dng", "tiff")
+            else -> emptySet()
+        }
+        return allowed.contains(magika)
+    }
+
+    private fun renderTypeMismatch(
+        path: String,
+        displayName: String,
+        expectedType: String,
+        magikaType: String,
+        magikaMs: Double,
+    ) {
+        runOnUiThread {
+            setChip(routeChip, "route: mismatch", ChipState.BAD)
+            setChip(cveChip, "CVE: n/a", ChipState.NEUTRAL)
+            setChip(dngChip, "DNG: n/a", ChipState.NEUTRAL)
+            setChip(engineChip, "engine: type check", ChipState.BAD)
+
+            engineScoreView.text = "Type mismatch: expected=$expectedType • magika=$magikaType"
+            engineDetailView.text = String.format("magika_time=%.2fms", magikaMs)
+
+            verdictView.text = "MALICIOUS"
+            verdictView.setTextColor(ContextCompat.getColor(this, R.color.status_malicious))
+            verdictDetailView.text = "Decision: MALICIOUS (type_mismatch)"
+
+            summaryView.text = buildString {
+                append("Selected: ").append(displayName).append("\n")
+                append("Path: ").append(path).append("\n")
+                append("\nWorkflow:\n")
+                append("1) Expected (extension) → ").append(expectedType).append("\n")
+                append("2) Magika → ").append(magikaType).append("\n")
+                append(String.format("3) Static rule: mismatch (%.2fms)\n\n", magikaMs))
+                append("Decision: MALICIOUS\n")
+            }
+
+            updateStatus("Done", R.color.status_malicious)
+        }
+    }
+
+    private fun showSamplePicker() {
+        val base = File("/sdcard/Download/LandFallDetectorSamples")
+        if (!base.exists() || !base.isDirectory) {
+            updateStatus("Samples not found under /sdcard/Download", R.color.status_malicious)
+            summaryView.text = "Missing folder: /sdcard/Download/LandFallDetectorSamples"
+            return
+        }
+
+        val categories = base.listFiles()
+            ?.filter { it.isDirectory }
+            ?.sortedBy { it.name }
+            ?: emptyList()
+
+        if (categories.isEmpty()) {
+            updateStatus("No sample folders found", R.color.status_malicious)
+            summaryView.text = "Empty folder: ${base.absolutePath}"
+            return
+        }
+
+        val labels = categories.map { it.name }.toTypedArray()
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Choose a sample folder")
+            .setItems(labels) { _, which ->
+                showSampleFilePicker(categories[which])
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showSampleFilePicker(dir: File) {
+        val files = dir.listFiles()
+            ?.filter { it.isFile }
+            ?.sortedBy { it.name }
+            ?: emptyList()
+
+        if (files.isEmpty()) {
+            updateStatus("No files in ${dir.name}", R.color.status_malicious)
+            summaryView.text = "Empty folder: ${dir.absolutePath}"
+            return
+        }
+
+        val labels = files.map { it.name }.toTypedArray()
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Choose a file (${dir.name})")
+            .setItems(labels) { _, which ->
+                val file = files[which]
+                fileNameView.text = file.name
+                fileMetaView.text = "${file.length()} bytes • path: ${file.absolutePath}"
+                scanSingleFile(file.absolutePath, file.name)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun scanJpeg(path: String, displayName: String) {
+        val j0 = SystemClock.elapsedRealtimeNanos()
+        val features = jpegExtractor.extract(path)
+        val j1 = SystemClock.elapsedRealtimeNanos()
+        val score = if (features != null) jpegRunner.predict(features) else null
+        val j2 = SystemClock.elapsedRealtimeNanos()
+
+        val extractMs = (j1 - j0) / 1_000_000.0
+        val inferMs = (j2 - j1) / 1_000_000.0
+
+        val malicious = score != null && score >= jpegMeta.threshold
+        val verdictText = if (malicious) "MALICIOUS" else "BENIGN"
+        val verdictColor = if (malicious) R.color.status_malicious else R.color.status_benign
+
+        runOnUiThread {
+            setChip(routeChip, "route: jpeg", ChipState.NEUTRAL)
+            setChip(cveChip, "CVE: n/a", ChipState.NEUTRAL)
+            setChip(dngChip, "DNG: n/a", ChipState.NEUTRAL)
+            setChip(engineChip, "engine: JPEG AE", ChipState.NEUTRAL)
+
+            val scoreLine = if (score != null) {
+                String.format("JPEG AE score: %.6f (thr=%.6f)", score, jpegMeta.threshold)
+            } else {
+                "JPEG AE score: FAIL"
+            }
+            engineScoreView.text = scoreLine
+            engineDetailView.text = String.format("extract=%.2fms • infer=%.2fms", extractMs, inferMs)
+
+            verdictView.text = verdictText
+            verdictView.setTextColor(ContextCompat.getColor(this, verdictColor))
+            verdictDetailView.text = if (score != null) "Decision: $verdictText (jpeg_ae)" else "Decision: ERROR (jpeg_ae)"
+
+            summaryView.text = buildString {
+                append("Selected: ").append(displayName).append("\n")
+                append("Path: ").append(path).append("\n")
+                append("\nWorkflow:\n")
+                append("1) Magika → jpeg\n")
+                append("2) JPEG AE\n\n")
+                append(scoreLine).append("\n")
+                append(String.format("Timing: extract=%.2fms infer=%.2fms\n", extractMs, inferMs))
+                append("Decision: ").append(verdictText).append("\n")
+            }
+
+            updateStatus("Done", verdictColor)
+        }
+    }
+
+    private fun scanTiff(path: String, displayName: String) {
+        val tiff = TiffParser.parse(path)
+        val expectedType = expectedTypeFromName(displayName)
+
+        val c0 = SystemClock.elapsedRealtimeNanos()
+        val cve = CveDetector.evaluate(tiff)
+        val c1 = SystemClock.elapsedRealtimeNanos()
+        val cveMs = (c1 - c0) / 1_000_000.0
+
+        if (cve.hasCveHits) {
+            val cveIds = cve.hits.joinToString(", ") { it.cveId }
+            runOnUiThread {
+                setChip(routeChip, "route: tiff", ChipState.NEUTRAL)
+                setChip(cveChip, "CVE: HIT", ChipState.BAD)
+                setChip(dngChip, "DNG: ${if (tiff.isDng == 1) "yes" else "no"}", ChipState.NEUTRAL)
+                setChip(engineChip, "engine: CVE rules", ChipState.BAD)
+                engineScoreView.text = "CVE match: $cveIds"
+                engineDetailView.text = String.format("scan=%.2fms", cveMs)
+
+                verdictView.text = "MALICIOUS"
+                verdictView.setTextColor(ContextCompat.getColor(this, R.color.status_malicious))
+                verdictDetailView.text = "Decision: MALICIOUS (cve)"
+
+                summaryView.text = buildString {
+                    append("Selected: ").append(displayName).append("\n")
+                    append("Path: ").append(path).append("\n")
+                    append("\nWorkflow:\n")
+                    append("1) Magika → tiff\n")
+                    append(String.format("2) CVE rules (%.2fms) → HIT\n\n", cveMs))
+                    for (hit in cve.hits) {
+                        append("- ").append(hit.cveId).append(": ").append(hit.description).append("\n")
+                    }
+                    append("\nDecision: MALICIOUS\n")
+                }
+
+                updateStatus("Done", R.color.status_malicious)
+            }
+            return
+        }
+
+        val mustUseTagSeq = (expectedType == "dng") || (tiff.isDng == 1)
+        if (mustUseTagSeq) {
+            val t0 = SystemClock.elapsedRealtimeNanos()
+            val tagSeqInput = TagSequenceExtractor.extract(path, tagSeqMeta.maxSeqLen)
+            val t1 = SystemClock.elapsedRealtimeNanos()
+            val tagSeqScore = if (tagSeqInput != null) tagSeqRunner.predict(tagSeqInput) else null
+            val t2 = SystemClock.elapsedRealtimeNanos()
+
+            val tExtractMs = (t1 - t0) / 1_000_000.0
+            val tInferMs = (t2 - t1) / 1_000_000.0
+
+            if (tagSeqInput == null || !tagSeqInput.isDng || tagSeqScore == null) {
+                val reason = when {
+                    tagSeqInput == null -> "TagSeq extract failed"
+                    !tagSeqInput.isDng -> "Not DNG per TagSeq"
+                    else -> "TagSeq inference failed"
+                }
+                runOnUiThread {
+                    setChip(routeChip, "route: dng", ChipState.NEUTRAL)
+                    setChip(cveChip, "CVE: none", ChipState.OK)
+                    setChip(dngChip, "DNG: yes", ChipState.NEUTRAL)
+                    setChip(engineChip, "engine: TagSeq required", ChipState.BAD)
+
+                    engineScoreView.text = "FAIL (DNG requires TagSeq)"
+                    engineDetailView.text = buildString {
+                        append(reason)
+                        append(String.format(" • extract=%.2fms • infer=%.2fms • cve_scan=%.2fms", tExtractMs, tInferMs, cveMs))
+                    }
+
+                    verdictView.text = "MALICIOUS"
+                    verdictView.setTextColor(ContextCompat.getColor(this, R.color.status_malicious))
+                    verdictDetailView.text = "Decision: MALICIOUS (tagseq_required_failed)"
+
+                    summaryView.text = buildString {
+                        append("Selected: ").append(displayName).append("\n")
+                        append("Path: ").append(path).append("\n")
+                        append("\nWorkflow:\n")
+                        append("1) Magika → tiff\n")
+                        append(String.format("2) CVE rules (%.2fms) → none\n", cveMs))
+                        append("3) DNG route → TagSeq GRU-AE (required)\n\n")
+                        append("TagSeq: FAIL (").append(reason).append(")\n")
+                        append(String.format("Timing: extract=%.2fms infer=%.2fms\n", tExtractMs, tInferMs))
+                        append("\nDecision: MALICIOUS\n")
+                    }
+
+                    updateStatus("Done", R.color.status_malicious)
+                }
+                return
+            }
+
+            val malicious = tagSeqScore >= tagSeqMeta.threshold
+            val verdictText = if (malicious) "MALICIOUS" else "BENIGN"
+            val verdictColor = if (malicious) R.color.status_malicious else R.color.status_benign
+            val perElementMse = tagSeqScore / tagSeqMeta.featureDim
+
+            runOnUiThread {
+                setChip(routeChip, "route: dng", ChipState.NEUTRAL)
+                setChip(cveChip, "CVE: none", ChipState.OK)
+                setChip(dngChip, "DNG: yes", ChipState.NEUTRAL)
+                setChip(engineChip, "engine: TagSeq GRU-AE", ChipState.NEUTRAL)
+
+                engineScoreView.text = String.format(
+                    "TagSeq score: %.6f (thr=%.6f) • mse/elem: %.6f",
+                    tagSeqScore,
+                    tagSeqMeta.threshold,
+                    perElementMse
+                )
+                engineDetailView.text = String.format(
+                    "seq_len=%d • extract=%.2fms • infer=%.2fms • cve_scan=%.2fms",
+                    tagSeqInput.length,
+                    tExtractMs,
+                    tInferMs,
+                    cveMs
+                )
+
+                verdictView.text = verdictText
+                verdictView.setTextColor(ContextCompat.getColor(this, verdictColor))
+                verdictDetailView.text = "Decision: $verdictText (tagseq)"
+
+                summaryView.text = buildString {
+                    append("Selected: ").append(displayName).append("\n")
+                    append("Path: ").append(path).append("\n")
+                    append("\nWorkflow:\n")
+                    append("1) Magika → tiff\n")
+                    append(String.format("2) CVE rules (%.2fms) → none\n", cveMs))
+                    append("3) DNG detected → TagSeq GRU-AE\n\n")
+                    append(String.format("TagSeq score: %.6f (thr=%.6f)\n", tagSeqScore, tagSeqMeta.threshold))
+                    append(String.format("TagSeq mse/elem: %.6f\n", perElementMse))
+                    append(String.format("Timing: extract=%.2fms infer=%.2fms\n", tExtractMs, tInferMs))
+                    append("Decision: ").append(verdictText).append("\n")
+                }
+
+                updateStatus("Done", verdictColor)
+            }
+            return
+        }
+
+        val a0 = SystemClock.elapsedRealtimeNanos()
+        val anomalyFeatures = tiffAeExtractor.extractFromParsed(tiff, path)
+        val a1 = SystemClock.elapsedRealtimeNanos()
+        val anomalyScore = if (anomalyFeatures != null) tiffAeRunner.predict(anomalyFeatures) else null
+        val a2 = SystemClock.elapsedRealtimeNanos()
+
+        val aExtractMs = (a1 - a0) / 1_000_000.0
+        val aInferMs = (a2 - a1) / 1_000_000.0
+
+        val malicious = anomalyScore != null && anomalyScore >= tiffAeMeta.threshold
+        val verdictText = if (malicious) "MALICIOUS" else "BENIGN"
+        val verdictColor = if (malicious) R.color.status_malicious else R.color.status_benign
+
+        runOnUiThread {
+            setChip(routeChip, "route: tiff", ChipState.NEUTRAL)
+            setChip(cveChip, "CVE: none", ChipState.OK)
+            setChip(dngChip, "DNG: no", ChipState.NEUTRAL)
+            setChip(engineChip, "engine: TIFF AE", ChipState.NEUTRAL)
+
+            val scoreLine = if (anomalyScore != null) {
+                String.format("TIFF AE score: %.6f (thr=%.6f)", anomalyScore, tiffAeMeta.threshold)
+            } else {
+                "TIFF AE score: FAIL"
+            }
+            engineScoreView.text = scoreLine
+            engineDetailView.text = buildString {
+                append(String.format("extract=%.2fms • infer=%.2fms • cve_scan=%.2fms", aExtractMs, aInferMs, cveMs))
+            }
+
+            verdictView.text = if (anomalyScore != null) verdictText else "ERROR"
+            verdictView.setTextColor(ContextCompat.getColor(this, if (anomalyScore != null) verdictColor else R.color.status_malicious))
+            verdictDetailView.text = if (anomalyScore != null) "Decision: $verdictText (tiff_ae)" else "Decision: ERROR (tiff_ae)"
+
+            summaryView.text = buildString {
+                append("Selected: ").append(displayName).append("\n")
+                append("Path: ").append(path).append("\n")
+                append("\nWorkflow:\n")
+                append("1) Magika → tiff\n")
+                append(String.format("2) CVE rules (%.2fms) → none\n", cveMs))
+                append("3) Non-DNG TIFF → TIFF AE\n\n")
+                append(scoreLine).append("\n")
+                append(String.format("Timing: extract=%.2fms infer=%.2fms\n", aExtractMs, aInferMs))
+                append("Decision: ").append(if (anomalyScore != null) verdictText else "ERROR").append("\n")
+            }
+
+            updateStatus("Done", if (anomalyScore != null) verdictColor else R.color.status_malicious)
+        }
+    }
+
+    private fun renderUnsupported(path: String, displayName: String, type: String, magikaMs: Double) {
+        runOnUiThread {
+            setChip(routeChip, "route: unsupported", ChipState.NEUTRAL)
+            setChip(cveChip, "CVE: n/a", ChipState.NEUTRAL)
+            setChip(dngChip, "DNG: n/a", ChipState.NEUTRAL)
+            setChip(engineChip, "engine: —", ChipState.NEUTRAL)
+            engineScoreView.text = "Unsupported type: $type"
+            engineDetailView.text = String.format("magika_time=%.2fms", magikaMs)
+            verdictView.text = "UNSUPPORTED"
+            verdictView.setTextColor(ContextCompat.getColor(this, R.color.status_neutral))
+            verdictDetailView.text = "Decision: UNSUPPORTED"
+
+            summaryView.text = buildString {
+                append("Selected: ").append(displayName).append("\n")
+                append("Path: ").append(path).append("\n")
+                append("\nWorkflow:\n")
+                append("1) Magika → ").append(type).append("\n")
+                append("2) No detector available\n\n")
+                append("Decision: UNSUPPORTED\n")
+            }
+
+            updateStatus("Done", R.color.status_neutral)
+        }
+    }
+
+    private fun runBenchmark() {
+        val paths = loadPaths()
+        if (paths.isEmpty()) {
+            summaryView.text = "No paths found. Put a list in /sdcard/bench_list.txt or " +
+                "/sdcard/Android/data/com.landfall.hybriddetector/files/bench_list.txt."
+            return
+        }
+
+        resetUi()
+        updateStatus("Benchmark running…", R.color.status_neutral)
+        verdictView.text = "BENCHMARK"
+        verdictDetailView.text = "Running ${paths.size} files…"
+
+        Thread {
+            Log.i("HybridDetector", "Running benchmark on ${paths.size} files")
+
+            var totalMagikaNs = 0L
+            var totalCveNs = 0L
+
+            var totalTagSeqExtractNs = 0L
+            var totalTagSeqInferNs = 0L
+            var tagSeqCount = 0
+
+            var totalTiffAeExtractNs = 0L
+            var totalTiffAeInferNs = 0L
+            var tiffAeCount = 0
+
+            var totalJpegExtractNs = 0L
+            var totalJpegInferNs = 0L
+            var jpegCount = 0
+
+            var cveHitCount = 0
+            var unsupportedCount = 0
+            var verdictMalCount = 0
+            var verdictBenCount = 0
+
+            for (path in paths) {
+                val m0 = SystemClock.elapsedRealtimeNanos()
+                val magika = magikaRunner.classify(path)
+                val m1 = SystemClock.elapsedRealtimeNanos()
+                totalMagikaNs += (m1 - m0)
+                val type = magika?.outputLabel?.lowercase() ?: "unknown"
+                val expected = expectedTypeFromName(path)
+
+                if (expected != "unknown" && !isTypeCompatible(expected, type)) {
+                    verdictMalCount++
+                    Log.i("HybridDetector", "type=$type | decision=MAL(type_mismatch) | expected=$expected | $path")
+                    continue
+                }
+
+                if (type == "jpeg") {
+                    val j0 = SystemClock.elapsedRealtimeNanos()
+                    val jpegFeatures = jpegExtractor.extract(path)
+                    val j1 = SystemClock.elapsedRealtimeNanos()
+                    val jpegScore = if (jpegFeatures != null) jpegRunner.predict(jpegFeatures) else null
+                    val j2 = SystemClock.elapsedRealtimeNanos()
+
+                    val jExtractMs = (j1 - j0) / 1_000_000.0
+                    val jInferMs = (j2 - j1) / 1_000_000.0
+
+                    if (jpegScore != null) {
+                        totalJpegExtractNs += (j1 - j0)
+                        totalJpegInferNs += (j2 - j1)
+                        jpegCount += 1
+                    }
+
+                    val isMal = jpegScore != null && jpegScore >= jpegMeta.threshold
+                    if (isMal) verdictMalCount++ else verdictBenCount++
+                    val part = if (jpegScore != null) {
+                        String.format("score=%.6f thr=%.6f ex=%.2fms in=%.2fms",
+                            jpegScore, jpegMeta.threshold, jExtractMs, jInferMs)
+                    } else {
+                        "score=FAIL"
+                    }
+                    Log.i("HybridDetector", "type=jpeg | decision=${if (isMal) "MAL" else "BEN"}(jpeg_ae) | $part | $path")
+                    continue
+                }
+
+                if (type != "tiff") {
+                    unsupportedCount += 1
+                    Log.i("HybridDetector", "type=$type | skipped | $path")
+                    continue
+                }
+
+                val tiff = TiffParser.parse(path)
+                val c0 = SystemClock.elapsedRealtimeNanos()
+                val cve = CveDetector.evaluate(tiff)
+                val c1 = SystemClock.elapsedRealtimeNanos()
+                totalCveNs += (c1 - c0)
+
+                if (cve.hasCveHits) {
+                    cveHitCount++
+                    verdictMalCount++
+                    val ids = cve.hits.joinToString(",") { it.cveId }
+                    Log.i("HybridDetector", "type=tiff | decision=MAL(cve) | cve=$ids | $path")
+                    continue
+                }
+
+                val mustUseTagSeq = (expected == "dng") || (tiff.isDng == 1)
+                if (mustUseTagSeq) {
+                    val t0 = SystemClock.elapsedRealtimeNanos()
+                    val tagSeqInput = TagSequenceExtractor.extract(path, tagSeqMeta.maxSeqLen)
+                    val t1 = SystemClock.elapsedRealtimeNanos()
+                    val tagSeqScore = if (tagSeqInput != null) tagSeqRunner.predict(tagSeqInput) else null
+                    val t2 = SystemClock.elapsedRealtimeNanos()
+
+                    val tExtractMs = (t1 - t0) / 1_000_000.0
+                    val tInferMs = (t2 - t1) / 1_000_000.0
+
+                    if (tagSeqScore != null) {
+                        totalTagSeqExtractNs += (t1 - t0)
+                        totalTagSeqInferNs += (t2 - t1)
+                        tagSeqCount += 1
+                    }
+
+                    if (tagSeqInput == null || !tagSeqInput.isDng || tagSeqScore == null) {
+                        verdictMalCount++
+                        val reason = when {
+                            tagSeqInput == null -> "extract_fail"
+                            !tagSeqInput.isDng -> "not_dng"
+                            else -> "infer_fail"
+                        }
+                        Log.i("HybridDetector", "type=tiff | decision=MAL(tagseq_required_failed) | reason=$reason | ex=%.2fms in=%.2fms | %s"
+                            .format(tExtractMs, tInferMs, path))
+                        continue
+                    }
+
+                    val isMal = tagSeqScore >= tagSeqMeta.threshold
+                    if (isMal) verdictMalCount++ else verdictBenCount++
+                    Log.i("HybridDetector", "type=tiff | decision=${if (isMal) "MAL" else "BEN"}(tagseq) | score=%.6f thr=%.6f ex=%.2fms in=%.2fms | %s"
+                        .format(tagSeqScore, tagSeqMeta.threshold, tExtractMs, tInferMs, path))
+                    continue
+                }
+
+                val a0 = SystemClock.elapsedRealtimeNanos()
+                val anomalyFeatures = tiffAeExtractor.extractFromParsed(tiff, path)
+                val a1 = SystemClock.elapsedRealtimeNanos()
+                val anomalyScore = if (anomalyFeatures != null) tiffAeRunner.predict(anomalyFeatures) else null
+                val a2 = SystemClock.elapsedRealtimeNanos()
+
+                val aExtractMs = (a1 - a0) / 1_000_000.0
+                val aInferMs = (a2 - a1) / 1_000_000.0
+
+                if (anomalyScore != null) {
+                    totalTiffAeExtractNs += (a1 - a0)
+                    totalTiffAeInferNs += (a2 - a1)
+                    tiffAeCount += 1
+                }
+
+                val isMal = anomalyScore != null && anomalyScore >= tiffAeMeta.threshold
+                if (isMal) verdictMalCount++ else verdictBenCount++
+                Log.i("HybridDetector", "type=tiff | decision=${if (isMal) "MAL" else "BEN"}(tiff_ae) | score=%s thr=%.6f ex=%.2fms in=%.2fms | %s"
+                    .format(anomalyScore?.let { "%.6f".format(it) } ?: "FAIL", tiffAeMeta.threshold, aExtractMs, aInferMs, path))
+            }
+
+            val avgMagikaMs = totalMagikaNs / 1_000_000.0 / paths.size
+            val avgCveMs = totalCveNs / 1_000_000.0 / paths.size
+            val avgTagSeqExtractMs = if (tagSeqCount > 0) totalTagSeqExtractNs / 1_000_000.0 / tagSeqCount else 0.0
+            val avgTagSeqInferMs = if (tagSeqCount > 0) totalTagSeqInferNs / 1_000_000.0 / tagSeqCount else 0.0
+            val avgTiffAeExtractMs = if (tiffAeCount > 0) totalTiffAeExtractNs / 1_000_000.0 / tiffAeCount else 0.0
+            val avgTiffAeInferMs = if (tiffAeCount > 0) totalTiffAeInferNs / 1_000_000.0 / tiffAeCount else 0.0
+            val avgJpegExtractMs = if (jpegCount > 0) totalJpegExtractNs / 1_000_000.0 / jpegCount else 0.0
+            val avgJpegInferMs = if (jpegCount > 0) totalJpegInferNs / 1_000_000.0 / jpegCount else 0.0
+
+            val benchSummary = buildString {
+                append("Files: ").append(paths.size).append("\n\n")
+                append("Thresholds:\n")
+                append(String.format("- TIFF AE: %.6f\n", tiffAeMeta.threshold))
+                append(String.format("- TagSeq: %.6f\n", tagSeqMeta.threshold))
+                append(String.format("- JPEG AE: %.6f\n\n", jpegMeta.threshold))
+                append("Results:\n")
+                append(String.format("- BEN: %d\n", verdictBenCount))
+                append(String.format("- MAL: %d\n", verdictMalCount))
+                append(String.format("- CVE hits: %d\n", cveHitCount))
+                append(String.format("- Unsupported: %d\n\n", unsupportedCount))
+                append("Average timings:\n")
+                append(String.format("- Magika: %.3fms/file\n", avgMagikaMs))
+                append(String.format("- CVE rules: %.3fms/file\n", avgCveMs))
+                append(String.format("- TagSeq: extract=%.3fms infer=%.3fms (n=%d)\n", avgTagSeqExtractMs, avgTagSeqInferMs, tagSeqCount))
+                append(String.format("- TIFF AE: extract=%.3fms infer=%.3fms (n=%d)\n", avgTiffAeExtractMs, avgTiffAeInferMs, tiffAeCount))
+                append(String.format("- JPEG AE: extract=%.3fms infer=%.3fms (n=%d)\n", avgJpegExtractMs, avgJpegInferMs, jpegCount))
+            }
+
+            runOnUiThread {
+                verdictView.text = "BENCHMARK COMPLETE"
+                verdictView.setTextColor(ContextCompat.getColor(this, R.color.status_neutral))
+                verdictDetailView.text = "See logcat (tag=HybridDetector) for per-file decisions"
+                summaryView.text = benchSummary
+                updateStatus("Benchmark done", R.color.status_neutral)
+            }
+        }.start()
     }
 
     private fun hasStoragePermission(): Boolean {
@@ -151,444 +844,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun runBenchmark() {
-        val paths = loadPaths()
-        if (paths.isEmpty()) {
-            summaryView.text = "No paths found. Put a list in /sdcard/bench_list.txt or " +
-                "/sdcard/Android/data/com.landfall.hybriddetector/files/bench_list.txt, " +
-                "or pass a path via intent."
-            updateResult(hybridDetailView, "Hybrid details...", R.color.status_neutral)
-            updateResult(anomalyDetailView, "Anomaly details...", R.color.status_neutral)
-            updateResult(magikaDetailView, "Magika details...", R.color.status_neutral)
-            updateResult(tagseqDetailView, "TagSeq details...", R.color.status_neutral)
-            return
-        }
-
-        cveResultView.visibility = View.GONE
-        updateResult(hybridResultView, "Hybrid: (batch)", R.color.status_neutral)
-        updateResult(anomalyResultView, "Anomaly AE: (batch)", R.color.status_neutral)
-        updateResult(magikaResultView, "Magika: (single-file)", R.color.status_neutral)
-        updateResult(tagseqResultView, "TagSeq GRU-AE: (batch)", R.color.status_neutral)
-        updateResult(hybridDetailView, "Hybrid details...", R.color.status_neutral)
-        updateResult(anomalyDetailView, "Anomaly details...", R.color.status_neutral)
-        updateResult(magikaDetailView, "Magika details...", R.color.status_neutral)
-        updateResult(tagseqDetailView, "TagSeq details...", R.color.status_neutral)
-        Log.i("HybridDetector", "Running benchmark on ${paths.size} files")
-        var totalExtractNs = 0L
-        var totalInferNs = 0L
-        var totalAnomalyExtractNs = 0L
-        var totalAnomalyInferNs = 0L
-        var totalTagSeqExtractNs = 0L
-        var totalTagSeqInferNs = 0L
-        var totalCveNs = 0L
-        var hybridCount = 0
-        var anomalyCount = 0
-        var tagSeqCount = 0
-        var cveHitCount = 0
-        val summarySb = StringBuilder()
-        summarySb.append("Files: ").append(paths.size).append("\n")
-        summarySb.append(String.format(
-            "Hybrid thr=%.2f  Anomaly thr=%.3f  TagSeq thr=%.3f\n",
-            MODEL_THRESHOLD,
-            anomalyMeta.threshold,
-            tagSeqMeta.threshold
-        ))
-        val hybridSb = StringBuilder()
-        val anomalySb = StringBuilder()
-        val tagSeqSb = StringBuilder()
-
-        for (path in paths) {
-            // TIER 1: Parse once, run CVE rules
-            val tiffFeatures = TiffParser.parse(path)
-            val c0 = SystemClock.elapsedRealtimeNanos()
-            val cveResult = CveDetector.evaluate(tiffFeatures)
-            val c1 = SystemClock.elapsedRealtimeNanos()
-            totalCveNs += (c1 - c0)
-            if (cveResult.hasCveHits) cveHitCount++
-
-            val cvePart = if (cveResult.hasCveHits) {
-                val ids = cveResult.hits.joinToString(",") { it.cveId }
-                "CVE=$ids"
-            } else {
-                "CVE=none"
-            }
-
-            // TIER 2: ML models (run for all files in benchmark mode for comparison)
-            val h0 = SystemClock.elapsedRealtimeNanos()
-            val features = extractor.extractFromParsed(tiffFeatures, path)
-            val h1 = SystemClock.elapsedRealtimeNanos()
-            val score = if (features != null) modelRunner.predict(features) else null
-            val h2 = SystemClock.elapsedRealtimeNanos()
-
-            val a0 = SystemClock.elapsedRealtimeNanos()
-            val anomalyFeatures = anomalyExtractor.extractFromParsed(tiffFeatures, path)
-            val a1 = SystemClock.elapsedRealtimeNanos()
-            val anomalyScore = if (anomalyFeatures != null) anomalyRunner.predict(anomalyFeatures) else null
-            val a2 = SystemClock.elapsedRealtimeNanos()
-
-            val t0 = SystemClock.elapsedRealtimeNanos()
-            val tagSeqInput = TagSequenceExtractor.extract(path, tagSeqMeta.maxSeqLen)
-            val t1 = SystemClock.elapsedRealtimeNanos()
-            val tagSeqScore = if (tagSeqInput != null && tagSeqInput.isDng) {
-                tagSeqRunner.predict(tagSeqInput)
-            } else {
-                null
-            }
-            val t2 = SystemClock.elapsedRealtimeNanos()
-
-            val hExtractMs = (h1 - h0) / 1_000_000.0
-            val hInferMs = (h2 - h1) / 1_000_000.0
-            val aExtractMs = (a1 - a0) / 1_000_000.0
-            val aInferMs = (a2 - a1) / 1_000_000.0
-            val tExtractMs = (t1 - t0) / 1_000_000.0
-            val tInferMs = (t2 - t1) / 1_000_000.0
-
-            if (score != null) {
-                totalExtractNs += (h1 - h0)
-                totalInferNs += (h2 - h1)
-                hybridCount += 1
-            }
-            if (anomalyScore != null) {
-                totalAnomalyExtractNs += (a1 - a0)
-                totalAnomalyInferNs += (a2 - a1)
-                anomalyCount += 1
-            }
-            if (tagSeqScore != null) {
-                totalTagSeqExtractNs += (t1 - t0)
-                totalTagSeqInferNs += (t2 - t1)
-                tagSeqCount += 1
-            }
-
-            val hybridPart = if (score != null) {
-                val label = if (score >= MODEL_THRESHOLD) "MAL" else "BEN"
-                String.format("hybrid=%.4f(%s) ex=%.2fms in=%.2fms", score, label, hExtractMs, hInferMs)
-            } else {
-                "hybrid=FAIL"
-            }
-            val anomalyPart = if (anomalyScore != null) {
-                val label = if (anomalyScore >= anomalyMeta.threshold) "MAL" else "BEN"
-                String.format("anomaly=%.4f(%s) ex=%.2fms in=%.2fms", anomalyScore, label, aExtractMs, aInferMs)
-            } else {
-                "anomaly=FAIL"
-            }
-            val tagSeqPart = if (tagSeqScore != null) {
-                val label = if (tagSeqScore >= tagSeqMeta.threshold) "MAL" else "BEN"
-                String.format("tagseq=%.4f(%s) ex=%.2fms in=%.2fms", tagSeqScore, label, tExtractMs, tInferMs)
-            } else {
-                "tagseq=N/A"
-            }
-
-            hybridSb.append(hybridPart).append(" | ").append(cvePart).append(" | ").append(path).append("\n")
-            anomalySb.append(anomalyPart).append(" | ").append(path).append("\n")
-            tagSeqSb.append(tagSeqPart).append(" | ").append(path).append("\n")
-            Log.i("HybridDetector", "$cvePart | $hybridPart | $anomalyPart | $tagSeqPart | $path")
-        }
-
-        val avgCveMs = if (paths.isNotEmpty()) totalCveNs / 1_000_000.0 / paths.size else 0.0
-        summarySb.append(String.format("CVE hits: %d  avg CVE scan: %.3fms\n", cveHitCount, avgCveMs))
-
-        if (hybridCount > 0) {
-            val avgExtractMs = totalExtractNs / 1_000_000.0 / hybridCount
-            val avgInferMs = totalInferNs / 1_000_000.0 / hybridCount
-            hybridSb.append(String.format("\nAvg extract=%.3fms infer=%.3fms\n", avgExtractMs, avgInferMs))
-            Log.i("HybridDetector", "Hybrid avg extract=%.3fms infer=%.3fms".format(avgExtractMs, avgInferMs))
-        }
-        if (anomalyCount > 0) {
-            val avgExtractMs = totalAnomalyExtractNs / 1_000_000.0 / anomalyCount
-            val avgInferMs = totalAnomalyInferNs / 1_000_000.0 / anomalyCount
-            anomalySb.append(String.format("\nAvg extract=%.3fms infer=%.3fms\n", avgExtractMs, avgInferMs))
-            Log.i("HybridDetector", "Anomaly avg extract=%.3fms infer=%.3fms".format(avgExtractMs, avgInferMs))
-        }
-        if (tagSeqCount > 0) {
-            val avgExtractMs = totalTagSeqExtractNs / 1_000_000.0 / tagSeqCount
-            val avgInferMs = totalTagSeqInferNs / 1_000_000.0 / tagSeqCount
-            tagSeqSb.append(String.format("\nAvg extract=%.3fms infer=%.3fms\n", avgExtractMs, avgInferMs))
-            Log.i("HybridDetector", "TagSeq avg extract=%.3fms infer=%.3fms".format(avgExtractMs, avgInferMs))
-        }
-        summaryView.text = summarySb.toString()
-        updateResult(hybridDetailView, hybridSb.toString(), R.color.status_neutral)
-        updateResult(anomalyDetailView, anomalySb.toString(), R.color.status_neutral)
-        updateResult(tagseqDetailView, tagSeqSb.toString(), R.color.status_neutral)
-    }
-
-    private fun handleSelectedUri(uri: Uri) {
-        updateStatus("Status: Analyzing...", R.color.status_neutral)
-        summaryView.text = "Loading sample..."
-        cveResultView.visibility = View.GONE
-        updateResult(hybridDetailView, "Hybrid details...", R.color.status_neutral)
-        updateResult(anomalyDetailView, "Anomaly details...", R.color.status_neutral)
-        updateResult(magikaDetailView, "Magika details...", R.color.status_neutral)
-        updateResult(tagseqDetailView, "TagSeq details...", R.color.status_neutral)
-        Thread {
-            val displayName = queryDisplayName(uri)
-            val cached = copyToCache(uri, displayName)
-            if (cached == null) {
-                runOnUiThread {
-                    updateStatus("Status: Error", R.color.status_malicious)
-                    summaryView.text = "Failed to read selected sample."
-                }
-                return@Thread
-            }
-
-            // TIER 1: Parse once, run CVE rules
-            val tiff = TiffParser.parse(cached.absolutePath)
-            val cveResult = CveDetector.evaluate(tiff)
-
-            if (cveResult.hasCveHits) {
-                // CVE detected — show CVE verdict, skip ML
-                val cveIds = cveResult.hits.joinToString(", ") { it.cveId }
-                val cveSb = StringBuilder()
-                cveSb.append("CVE DETECTED: $cveIds\n")
-                for (hit in cveResult.hits) {
-                    cveSb.append("  ${hit.cveId}: ${hit.description}\n")
-                }
-                cveSb.append(String.format("CVE scan: %.3fms\n", cveResult.scanTimeMs))
-
-                val summarySb = StringBuilder()
-                summarySb.append("Selected: ").append(displayName ?: cached.name).append("\n")
-                summarySb.append("Cache: ").append(cached.absolutePath).append("\n")
-                summarySb.append("Size: ").append(cached.length()).append(" bytes\n")
-                summarySb.append("Decision: MALICIOUS (CVE rule match)\n\n")
-                summarySb.append("TIFF: ").append(if (tiff.isTiff == 1) "yes" else "no")
-                    .append("  DNG: ").append(if (tiff.isDng == 1) "yes" else "no").append("\n")
-                summarySb.append("Max declared opcode count: ").append(tiff.maxDeclaredOpcodeCount).append("\n")
-                summarySb.append("Compression values: ").append(tiff.compressionValues).append("\n")
-                summarySb.append("SPP values: ").append(tiff.sppValues).append("\n")
-                summarySb.append("SOF3 mismatch: ").append(tiff.sof3ComponentMismatch).append("\n")
-                summarySb.append("Tile offsets/bytecounts: ")
-                    .append(tiff.tileOffsetsCount).append("/")
-                    .append(tiff.tileByteCountsCount).append("\n")
-                summarySb.append("Expected tile count: ").append(tiff.expectedTileCount).append("\n")
-
-                runOnUiThread {
-                    updateStatus("Status: MALICIOUS", R.color.status_malicious)
-                    cveResultView.visibility = View.VISIBLE
-                    updateResult(cveResultView, cveSb.toString(), R.color.status_malicious)
-                    summaryView.text = summarySb.toString()
-                    updateResult(hybridResultView, "Hybrid: skipped (CVE)", R.color.status_neutral)
-                    updateResult(anomalyResultView, "Anomaly AE: skipped (CVE)", R.color.status_neutral)
-                    updateResult(magikaResultView, "Magika: skipped (CVE)", R.color.status_neutral)
-                    updateResult(tagseqResultView, "TagSeq: skipped (CVE)", R.color.status_neutral)
-                    updateResult(hybridDetailView, "Skipped — CVE rule triggered", R.color.status_neutral)
-                    updateResult(anomalyDetailView, "Skipped — CVE rule triggered", R.color.status_neutral)
-                    updateResult(magikaDetailView, "Skipped — CVE rule triggered", R.color.status_neutral)
-                    updateResult(tagseqDetailView, "Skipped — CVE rule triggered", R.color.status_neutral)
-                }
-                return@Thread
-            }
-
-            // TIER 2: No CVE hit — run ML models (reuse tiffFeatures to avoid re-parsing)
-            val h0 = SystemClock.elapsedRealtimeNanos()
-            val features = extractor.extractFromParsed(tiff, cached.absolutePath)
-            val h1 = SystemClock.elapsedRealtimeNanos()
-            val score = if (features != null) modelRunner.predict(features) else null
-            val h2 = SystemClock.elapsedRealtimeNanos()
-
-            val a0 = SystemClock.elapsedRealtimeNanos()
-            val anomalyFeatures = anomalyExtractor.extractFromParsed(tiff, cached.absolutePath)
-            val a1 = SystemClock.elapsedRealtimeNanos()
-            val anomalyScore = if (anomalyFeatures != null) anomalyRunner.predict(anomalyFeatures) else null
-            val a2 = SystemClock.elapsedRealtimeNanos()
-
-            val m0 = SystemClock.elapsedRealtimeNanos()
-            val magikaResult = magikaRunner.classify(cached.absolutePath)
-            val m1 = SystemClock.elapsedRealtimeNanos()
-
-            val t0 = SystemClock.elapsedRealtimeNanos()
-            val tagSeqInput = TagSequenceExtractor.extract(cached.absolutePath, tagSeqMeta.maxSeqLen)
-            val t1 = SystemClock.elapsedRealtimeNanos()
-            val tagSeqScore = if (tagSeqInput != null && tagSeqInput.isDng) {
-                tagSeqRunner.predict(tagSeqInput)
-            } else {
-                null
-            }
-            val t2 = SystemClock.elapsedRealtimeNanos()
-
-            if (score == null && anomalyScore == null && magikaResult == null && tagSeqScore == null) {
-                runOnUiThread {
-                    updateStatus("Status: Error", R.color.status_malicious)
-                    summaryView.text = "Failed to extract features for sample."
-                }
-                return@Thread
-            }
-
-            val hExtractMs = (h1 - h0) / 1_000_000.0
-            val hInferMs = (h2 - h1) / 1_000_000.0
-            val aExtractMs = (a1 - a0) / 1_000_000.0
-            val aInferMs = (a2 - a1) / 1_000_000.0
-            val mInferMs = (m1 - m0) / 1_000_000.0
-            val tExtractMs = (t1 - t0) / 1_000_000.0
-            val tInferMs = (t2 - t1) / 1_000_000.0
-            val hybridMalicious = score != null && score >= MODEL_THRESHOLD
-            val anomalyMalicious = anomalyScore != null && anomalyScore >= anomalyMeta.threshold
-            val tagSeqMalicious = tagSeqScore != null && tagSeqScore >= tagSeqMeta.threshold
-            val isMalicious = hybridMalicious || anomalyMalicious
-            val label = if (isMalicious) "MALICIOUS" else "BENIGN"
-
-            val summarySb = StringBuilder()
-            summarySb.append("Selected: ").append(displayName ?: cached.name).append("\n")
-            summarySb.append("Cache: ").append(cached.absolutePath).append("\n")
-            summarySb.append("Size: ").append(cached.length()).append(" bytes\n")
-            summarySb.append(String.format("Decision: %s\n", label))
-            summarySb.append(String.format("CVE scan: %.3fms (no hits)\n", cveResult.scanTimeMs))
-            summarySb.append("\n")
-            if (magikaResult != null) {
-                summarySb.append(String.format(
-                    "Magika: %s (score=%.3f)\n",
-                    magikaResult.outputLabel,
-                    magikaResult.score
-                ))
-                summarySb.append("\n")
-            }
-            if (tagSeqScore != null) {
-                summarySb.append(String.format(
-                    "TagSeq GRU-AE: %.4f (thr=%.3f)\n",
-                    tagSeqScore,
-                    tagSeqMeta.threshold
-                ))
-                summarySb.append("\n")
-            }
-            summarySb.append("TIFF: ").append(if (tiff.isTiff == 1) "yes" else "no")
-                .append("  DNG: ").append(if (tiff.isDng == 1) "yes" else "no").append("\n")
-            summarySb.append("Min dims: ").append(tiff.minWidth).append(" x ").append(tiff.minHeight).append("\n")
-            summarySb.append("IFD max entries: ").append(tiff.ifdEntryMax).append("\n")
-            summarySb.append("SubIFD count: ").append(tiff.subifdCountSum).append("\n")
-            summarySb.append("NewSubfileType unique: ").append(tiff.newSubfileTypesUnique).append("\n")
-            summarySb.append("Opcodes total/unknown/max: ")
-                .append(tiff.totalOpcodes).append("/")
-                .append(tiff.unknownOpcodes).append("/")
-                .append(tiff.maxOpcodeId).append("\n")
-            summarySb.append("Opcode list bytes: ")
-                .append(tiff.opcodeList1Bytes).append("/")
-                .append(tiff.opcodeList2Bytes).append("/")
-                .append(tiff.opcodeList3Bytes).append("\n")
-            summarySb.append("ZIP flags (eocd/local): ")
-                .append(tiff.zipEocdNearEnd).append("/")
-                .append(tiff.zipLocalInTail).append("\n")
-            summarySb.append("Rule flags: opcode_anom=")
-                .append(tiff.flagOpcodeAnomaly)
-                .append(" tiny_dims=").append(tiff.flagTinyDimsLowIfd)
-                .append(" zip_polyglot=").append(tiff.flagZipPolyglot)
-                .append(" dng_jpeg=").append(tiff.flagDngJpegMismatch)
-                .append(" any=").append(tiff.flagAny)
-                .append("\n")
-
-            val hybridSb = StringBuilder()
-            if (score != null) {
-                hybridSb.append(String.format("Score: %.6f\n", score))
-                hybridSb.append(String.format("Threshold: %.2f\n", MODEL_THRESHOLD))
-                hybridSb.append(String.format("Result: %s\n", if (hybridMalicious) "MALICIOUS" else "BENIGN"))
-                hybridSb.append(String.format("Extract: %.3fms\nInfer: %.3fms\n", hExtractMs, hInferMs))
-            } else {
-                hybridSb.append("Score: FAIL\n")
-            }
-
-            val attribution = if (features != null) {
-                attributionModel.computeTopContributions(features, 5)
-            } else {
-                null
-            }
-            if (attribution != null) {
-                hybridSb.append("\nTop positive contributions:\n")
-                for (c in attribution.topPositive) {
-                    hybridSb.append(String.format("  +%.6f %s (x=%.4f w=%.4f)\n",
-                        c.contribution, c.name, c.value, c.weight))
-                }
-                hybridSb.append("Top negative contributions:\n")
-                for (c in attribution.topNegative) {
-                    hybridSb.append(String.format("  %.6f %s (x=%.4f w=%.4f)\n",
-                        c.contribution, c.name, c.value, c.weight))
-                }
-                hybridSb.append(String.format("Attribution score: %.6f (logit=%.4f)\n",
-                    attribution.score, attribution.logit))
-            }
-
-            val anomalySb = StringBuilder()
-            if (anomalyScore != null) {
-                anomalySb.append(String.format("Score: %.6f\n", anomalyScore))
-                anomalySb.append(String.format("Threshold: %.3f\n", anomalyMeta.threshold))
-                anomalySb.append(String.format("Result: %s\n", if (anomalyMalicious) "MALICIOUS" else "BENIGN"))
-                anomalySb.append(String.format("Extract: %.3fms\nInfer: %.3fms\n", aExtractMs, aInferMs))
-            } else {
-                anomalySb.append("Score: FAIL\n")
-            }
-
-            val tagSeqSb = StringBuilder()
-            if (tagSeqScore != null) {
-                tagSeqSb.append(String.format("Score: %.6f\n", tagSeqScore))
-                tagSeqSb.append(String.format("Threshold: %.3f\n", tagSeqMeta.threshold))
-                tagSeqSb.append(String.format("Result: %s\n", if (tagSeqMalicious) "MALICIOUS" else "BENIGN"))
-                tagSeqSb.append(String.format("Extract: %.3fms\nInfer: %.3fms\n", tExtractMs, tInferMs))
-                if (tagSeqInput != null) {
-                    tagSeqSb.append(String.format("Seq length: %d\n", tagSeqInput.length))
-                    tagSeqSb.append(String.format("Is DNG: %s\n", if (tagSeqInput.isDng) "yes" else "no"))
-                }
-            } else {
-                tagSeqSb.append("Result: N/A (not DNG or parse failed)\n")
-            }
-
-            val magikaSb = StringBuilder()
-            if (magikaResult != null) {
-                magikaSb.append(String.format("DL label: %s\n", magikaResult.dlLabel))
-                magikaSb.append(String.format("Output: %s\n", magikaResult.outputLabel))
-                magikaSb.append(String.format("Score: %.6f\n", magikaResult.score))
-                magikaSb.append(String.format("Infer: %.3fms\n", mInferMs))
-            } else {
-                magikaSb.append("Result: FAIL\n")
-            }
-
-            runOnUiThread {
-                if (isMalicious) {
-                    updateStatus("Status: MALICIOUS", R.color.status_malicious)
-                } else {
-                    updateStatus("Status: BENIGN", R.color.status_benign)
-                }
-                cveResultView.visibility = View.GONE
-                val hybridColor = if (hybridMalicious) R.color.status_malicious else R.color.status_benign
-                val anomalyColor = if (anomalyMalicious) R.color.status_malicious else R.color.status_benign
-                val hybridText = if (score != null) {
-                    String.format("Hybrid (thr=%.2f): %s", MODEL_THRESHOLD, if (hybridMalicious) "MAL" else "BEN")
-                } else {
-                    "Hybrid: FAIL"
-                }
-                val anomalyText = if (anomalyScore != null) {
-                    String.format("Anomaly AE (thr=%.3f): %s", anomalyMeta.threshold,
-                        if (anomalyMalicious) "MAL" else "BEN")
-                } else {
-                    "Anomaly AE: FAIL"
-                }
-                val magikaText = if (magikaResult != null) {
-                    String.format("Magika: %s", magikaResult.outputLabel)
-                } else {
-                    "Magika: FAIL"
-                }
-                val tagSeqText = if (tagSeqScore != null) {
-                    String.format("TagSeq GRU-AE (thr=%.3f): %s", tagSeqMeta.threshold,
-                        if (tagSeqMalicious) "MAL" else "BEN")
-                } else {
-                    "TagSeq GRU-AE: N/A"
-                }
-                updateResult(hybridResultView, hybridText, if (score != null) hybridColor else R.color.status_neutral)
-                updateResult(anomalyResultView, anomalyText, if (anomalyScore != null) anomalyColor else R.color.status_neutral)
-                updateResult(magikaResultView, magikaText, R.color.status_neutral)
-                updateResult(tagseqResultView, tagSeqText, R.color.status_neutral)
-                summaryView.text = summarySb.toString()
-                updateResult(hybridDetailView, hybridSb.toString(), if (score != null) hybridColor else R.color.status_neutral)
-                updateResult(anomalyDetailView, anomalySb.toString(), if (anomalyScore != null) anomalyColor else R.color.status_neutral)
-                updateResult(magikaDetailView, magikaSb.toString(), R.color.status_neutral)
-                updateResult(tagseqDetailView, tagSeqSb.toString(), R.color.status_neutral)
-            }
-        }.start()
-    }
-
     private fun updateStatus(text: String, colorRes: Int) {
         statusView.text = text
         statusView.setTextColor(ContextCompat.getColor(this, colorRes))
-    }
-
-    private fun updateResult(view: TextView, text: String, colorRes: Int) {
-        view.text = text
-        view.setTextColor(ContextCompat.getColor(this, colorRes))
     }
 
     private fun queryDisplayName(uri: Uri): String? {
