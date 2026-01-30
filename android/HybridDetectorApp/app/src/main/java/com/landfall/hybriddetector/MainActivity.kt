@@ -25,7 +25,14 @@ class MainActivity : AppCompatActivity() {
     private enum class ChipState {
         NEUTRAL,
         OK,
+        WARN,
         BAD,
+    }
+
+    private enum class Verdict {
+        BENIGN,
+        SUSPICIOUS,
+        MALICIOUS,
     }
 
     private lateinit var statusView: TextView
@@ -170,10 +177,38 @@ class MainActivity : AppCompatActivity() {
                 chip.setChipBackgroundColorResource(R.color.status_benign)
                 chip.setTextColor(ContextCompat.getColor(this, android.R.color.white))
             }
+            ChipState.WARN -> {
+                chip.setChipBackgroundColorResource(R.color.status_suspicious)
+                chip.setTextColor(ContextCompat.getColor(this, android.R.color.white))
+            }
             ChipState.BAD -> {
                 chip.setChipBackgroundColorResource(R.color.status_malicious)
                 chip.setTextColor(ContextCompat.getColor(this, android.R.color.white))
             }
+        }
+    }
+
+    private fun verdictLabel(verdict: Verdict): String {
+        return when (verdict) {
+            Verdict.BENIGN -> "BENIGN"
+            Verdict.SUSPICIOUS -> "SUSPICIOUS"
+            Verdict.MALICIOUS -> "MALICIOUS"
+        }
+    }
+
+    private fun verdictColor(verdict: Verdict): Int {
+        return when (verdict) {
+            Verdict.BENIGN -> R.color.status_benign
+            Verdict.SUSPICIOUS -> R.color.status_suspicious
+            Verdict.MALICIOUS -> R.color.status_malicious
+        }
+    }
+
+    private fun verdictChipState(verdict: Verdict): ChipState {
+        return when (verdict) {
+            Verdict.BENIGN -> ChipState.OK
+            Verdict.SUSPICIOUS -> ChipState.WARN
+            Verdict.MALICIOUS -> ChipState.BAD
         }
     }
 
@@ -274,18 +309,20 @@ class MainActivity : AppCompatActivity() {
         magikaType: String,
         magikaMs: Double,
     ) {
+        val verdict = Verdict.SUSPICIOUS
+        val verdictText = verdictLabel(verdict)
         runOnUiThread {
-            setChip(routeChip, "route: mismatch", ChipState.BAD)
+            setChip(routeChip, "route: mismatch", verdictChipState(verdict))
             setChip(cveChip, "CVE: n/a", ChipState.NEUTRAL)
             setChip(dngChip, "DNG: n/a", ChipState.NEUTRAL)
-            setChip(engineChip, "engine: type check", ChipState.BAD)
+            setChip(engineChip, "engine: type check", verdictChipState(verdict))
 
             engineScoreView.text = "Type mismatch: expected=$expectedType • magika=$magikaType"
             engineDetailView.text = String.format("magika_time=%.2fms", magikaMs)
 
-            verdictView.text = "MALICIOUS"
-            verdictView.setTextColor(ContextCompat.getColor(this, R.color.status_malicious))
-            verdictDetailView.text = "Decision: MALICIOUS (type_mismatch)"
+            verdictView.text = verdictText
+            verdictView.setTextColor(ContextCompat.getColor(this, verdictColor(verdict)))
+            verdictDetailView.text = "Decision: $verdictText (type_mismatch)"
 
             summaryView.text = buildString {
                 append("Selected: ").append(displayName).append("\n")
@@ -294,10 +331,10 @@ class MainActivity : AppCompatActivity() {
                 append("1) Expected (extension) → ").append(expectedType).append("\n")
                 append("2) Magika → ").append(magikaType).append("\n")
                 append(String.format("3) Static rule: mismatch (%.2fms)\n\n", magikaMs))
-                append("Decision: MALICIOUS\n")
+                append("Decision: ").append(verdictText).append("\n")
             }
 
-            updateStatus("Done", R.color.status_malicious)
+            updateStatus("Done", verdictColor(verdict))
         }
     }
 
@@ -365,15 +402,19 @@ class MainActivity : AppCompatActivity() {
         val extractMs = (j1 - j0) / 1_000_000.0
         val inferMs = (j2 - j1) / 1_000_000.0
 
-        val malicious = score != null && score >= jpegMeta.threshold
-        val verdictText = if (malicious) "MALICIOUS" else "BENIGN"
-        val verdictColor = if (malicious) R.color.status_malicious else R.color.status_benign
+        val verdict = when {
+            score == null -> Verdict.SUSPICIOUS
+            score >= jpegMeta.threshold -> Verdict.SUSPICIOUS
+            else -> Verdict.BENIGN
+        }
+        val verdictText = verdictLabel(verdict)
+        val verdictColor = verdictColor(verdict)
 
         runOnUiThread {
             setChip(routeChip, "route: jpeg", ChipState.NEUTRAL)
             setChip(cveChip, "CVE: n/a", ChipState.NEUTRAL)
             setChip(dngChip, "DNG: n/a", ChipState.NEUTRAL)
-            setChip(engineChip, "engine: JPEG AE", ChipState.NEUTRAL)
+            setChip(engineChip, "engine: JPEG AE", verdictChipState(verdict))
 
             val scoreLine = if (score != null) {
                 String.format("JPEG AE score: %.6f (thr=%.6f)", score, jpegMeta.threshold)
@@ -385,7 +426,11 @@ class MainActivity : AppCompatActivity() {
 
             verdictView.text = verdictText
             verdictView.setTextColor(ContextCompat.getColor(this, verdictColor))
-            verdictDetailView.text = if (score != null) "Decision: $verdictText (jpeg_ae)" else "Decision: ERROR (jpeg_ae)"
+            verdictDetailView.text = when {
+                score == null -> "Decision: $verdictText (jpeg_ae_failed)"
+                verdict == Verdict.SUSPICIOUS -> "Decision: $verdictText (jpeg_anomaly)"
+                else -> "Decision: $verdictText (jpeg_ae)"
+            }
 
             summaryView.text = buildString {
                 append("Selected: ").append(displayName).append("\n")
@@ -412,32 +457,44 @@ class MainActivity : AppCompatActivity() {
         val cveMs = (c1 - c0) / 1_000_000.0
 
         if (cve.hasCveHits) {
-            val cveIds = cve.hits.joinToString(", ") { it.cveId }
+            val verdict = if (cve.hasMaliciousHits) Verdict.MALICIOUS else Verdict.SUSPICIOUS
+            val verdictText = verdictLabel(verdict)
+            val verdictColor = verdictColor(verdict)
+            val ids = cve.hits.joinToString(", ") { it.cveId }
+
             runOnUiThread {
                 setChip(routeChip, "route: tiff", ChipState.NEUTRAL)
-                setChip(cveChip, "CVE: HIT", ChipState.BAD)
+                setChip(
+                    cveChip,
+                    if (verdict == Verdict.MALICIOUS) "static: CVE" else "static: WARN",
+                    verdictChipState(verdict)
+                )
                 setChip(dngChip, "DNG: ${if (tiff.isDng == 1) "yes" else "no"}", ChipState.NEUTRAL)
-                setChip(engineChip, "engine: CVE rules", ChipState.BAD)
-                engineScoreView.text = "CVE match: $cveIds"
+                setChip(engineChip, "engine: static rules", verdictChipState(verdict))
+                engineScoreView.text = "Static match: $ids"
                 engineDetailView.text = String.format("scan=%.2fms", cveMs)
 
-                verdictView.text = "MALICIOUS"
-                verdictView.setTextColor(ContextCompat.getColor(this, R.color.status_malicious))
-                verdictDetailView.text = "Decision: MALICIOUS (cve)"
+                verdictView.text = verdictText
+                verdictView.setTextColor(ContextCompat.getColor(this, verdictColor))
+                verdictDetailView.text = if (verdict == Verdict.MALICIOUS) {
+                    "Decision: $verdictText (cve_rules)"
+                } else {
+                    "Decision: $verdictText (static_rules)"
+                }
 
                 summaryView.text = buildString {
                     append("Selected: ").append(displayName).append("\n")
                     append("Path: ").append(path).append("\n")
                     append("\nWorkflow:\n")
                     append("1) Magika → tiff\n")
-                    append(String.format("2) CVE rules (%.2fms) → HIT\n\n", cveMs))
+                    append(String.format("2) Static rules (%.2fms) → HIT\n\n", cveMs))
                     for (hit in cve.hits) {
                         append("- ").append(hit.cveId).append(": ").append(hit.description).append("\n")
                     }
-                    append("\nDecision: MALICIOUS\n")
+                    append("\nDecision: ").append(verdictText).append("\n")
                 }
 
-                updateStatus("Done", R.color.status_malicious)
+                updateStatus("Done", verdictColor)
             }
             return
         }
@@ -459,11 +516,13 @@ class MainActivity : AppCompatActivity() {
                     !tagSeqInput.isDng -> "Not DNG per TagSeq"
                     else -> "TagSeq inference failed"
                 }
+                val verdict = Verdict.SUSPICIOUS
+                val verdictText = verdictLabel(verdict)
                 runOnUiThread {
                     setChip(routeChip, "route: dng", ChipState.NEUTRAL)
                     setChip(cveChip, "CVE: none", ChipState.OK)
                     setChip(dngChip, "DNG: yes", ChipState.NEUTRAL)
-                    setChip(engineChip, "engine: TagSeq required", ChipState.BAD)
+                    setChip(engineChip, "engine: TagSeq required", verdictChipState(verdict))
 
                     engineScoreView.text = "FAIL (DNG requires TagSeq)"
                     engineDetailView.text = buildString {
@@ -471,9 +530,9 @@ class MainActivity : AppCompatActivity() {
                         append(String.format(" • extract=%.2fms • infer=%.2fms • cve_scan=%.2fms", tExtractMs, tInferMs, cveMs))
                     }
 
-                    verdictView.text = "MALICIOUS"
-                    verdictView.setTextColor(ContextCompat.getColor(this, R.color.status_malicious))
-                    verdictDetailView.text = "Decision: MALICIOUS (tagseq_required_failed)"
+                    verdictView.text = verdictText
+                    verdictView.setTextColor(ContextCompat.getColor(this, verdictColor(verdict)))
+                    verdictDetailView.text = "Decision: $verdictText (tagseq_required_failed)"
 
                     summaryView.text = buildString {
                         append("Selected: ").append(displayName).append("\n")
@@ -484,24 +543,24 @@ class MainActivity : AppCompatActivity() {
                         append("3) DNG route → TagSeq GRU-AE (required)\n\n")
                         append("TagSeq: FAIL (").append(reason).append(")\n")
                         append(String.format("Timing: extract=%.2fms infer=%.2fms\n", tExtractMs, tInferMs))
-                        append("\nDecision: MALICIOUS\n")
+                        append("\nDecision: ").append(verdictText).append("\n")
                     }
 
-                    updateStatus("Done", R.color.status_malicious)
+                    updateStatus("Done", verdictColor(verdict))
                 }
                 return
             }
 
-            val malicious = tagSeqScore >= tagSeqMeta.threshold
-            val verdictText = if (malicious) "MALICIOUS" else "BENIGN"
-            val verdictColor = if (malicious) R.color.status_malicious else R.color.status_benign
+            val verdict = if (tagSeqScore >= tagSeqMeta.threshold) Verdict.SUSPICIOUS else Verdict.BENIGN
+            val verdictText = verdictLabel(verdict)
+            val verdictColor = verdictColor(verdict)
             val perElementMse = tagSeqScore / tagSeqMeta.featureDim
 
             runOnUiThread {
                 setChip(routeChip, "route: dng", ChipState.NEUTRAL)
                 setChip(cveChip, "CVE: none", ChipState.OK)
                 setChip(dngChip, "DNG: yes", ChipState.NEUTRAL)
-                setChip(engineChip, "engine: TagSeq GRU-AE", ChipState.NEUTRAL)
+                setChip(engineChip, "engine: TagSeq GRU-AE", verdictChipState(verdict))
 
                 engineScoreView.text = String.format(
                     "TagSeq score: %.6f (thr=%.6f) • mse/elem: %.6f",
@@ -519,7 +578,11 @@ class MainActivity : AppCompatActivity() {
 
                 verdictView.text = verdictText
                 verdictView.setTextColor(ContextCompat.getColor(this, verdictColor))
-                verdictDetailView.text = "Decision: $verdictText (tagseq)"
+                verdictDetailView.text = if (verdict == Verdict.SUSPICIOUS) {
+                    "Decision: $verdictText (dng_anomaly)"
+                } else {
+                    "Decision: $verdictText (tagseq)"
+                }
 
                 summaryView.text = buildString {
                     append("Selected: ").append(displayName).append("\n")
@@ -530,12 +593,12 @@ class MainActivity : AppCompatActivity() {
                     append("3) DNG detected → TagSeq GRU-AE\n\n")
                     append(String.format("TagSeq score: %.6f (thr=%.6f)\n", tagSeqScore, tagSeqMeta.threshold))
                     append(String.format("TagSeq mse/elem: %.6f\n", perElementMse))
-                    append(String.format("Timing: extract=%.2fms infer=%.2fms\n", tExtractMs, tInferMs))
-                    append("Decision: ").append(verdictText).append("\n")
-                }
-
-                updateStatus("Done", verdictColor)
+                append(String.format("Timing: extract=%.2fms infer=%.2fms\n", tExtractMs, tInferMs))
+                append("Decision: ").append(verdictText).append("\n")
             }
+
+            updateStatus("Done", verdictColor)
+        }
             return
         }
 
@@ -548,15 +611,19 @@ class MainActivity : AppCompatActivity() {
         val aExtractMs = (a1 - a0) / 1_000_000.0
         val aInferMs = (a2 - a1) / 1_000_000.0
 
-        val malicious = anomalyScore != null && anomalyScore >= tiffAeMeta.threshold
-        val verdictText = if (malicious) "MALICIOUS" else "BENIGN"
-        val verdictColor = if (malicious) R.color.status_malicious else R.color.status_benign
+        val verdict = when {
+            anomalyScore == null -> Verdict.SUSPICIOUS
+            anomalyScore >= tiffAeMeta.threshold -> Verdict.SUSPICIOUS
+            else -> Verdict.BENIGN
+        }
+        val verdictText = verdictLabel(verdict)
+        val verdictColor = verdictColor(verdict)
 
         runOnUiThread {
             setChip(routeChip, "route: tiff", ChipState.NEUTRAL)
             setChip(cveChip, "CVE: none", ChipState.OK)
             setChip(dngChip, "DNG: no", ChipState.NEUTRAL)
-            setChip(engineChip, "engine: TIFF AE", ChipState.NEUTRAL)
+            setChip(engineChip, "engine: TIFF AE", verdictChipState(verdict))
 
             val scoreLine = if (anomalyScore != null) {
                 String.format("TIFF AE score: %.6f (thr=%.6f)", anomalyScore, tiffAeMeta.threshold)
@@ -568,9 +635,13 @@ class MainActivity : AppCompatActivity() {
                 append(String.format("extract=%.2fms • infer=%.2fms • cve_scan=%.2fms", aExtractMs, aInferMs, cveMs))
             }
 
-            verdictView.text = if (anomalyScore != null) verdictText else "ERROR"
-            verdictView.setTextColor(ContextCompat.getColor(this, if (anomalyScore != null) verdictColor else R.color.status_malicious))
-            verdictDetailView.text = if (anomalyScore != null) "Decision: $verdictText (tiff_ae)" else "Decision: ERROR (tiff_ae)"
+            verdictView.text = verdictText
+            verdictView.setTextColor(ContextCompat.getColor(this, verdictColor))
+            verdictDetailView.text = when {
+                anomalyScore == null -> "Decision: $verdictText (tiff_ae_failed)"
+                verdict == Verdict.SUSPICIOUS -> "Decision: $verdictText (tiff_anomaly)"
+                else -> "Decision: $verdictText (tiff_ae)"
+            }
 
             summaryView.text = buildString {
                 append("Selected: ").append(displayName).append("\n")
@@ -581,24 +652,26 @@ class MainActivity : AppCompatActivity() {
                 append("3) Non-DNG TIFF → TIFF AE\n\n")
                 append(scoreLine).append("\n")
                 append(String.format("Timing: extract=%.2fms infer=%.2fms\n", aExtractMs, aInferMs))
-                append("Decision: ").append(if (anomalyScore != null) verdictText else "ERROR").append("\n")
+                append("Decision: ").append(verdictText).append("\n")
             }
 
-            updateStatus("Done", if (anomalyScore != null) verdictColor else R.color.status_malicious)
+            updateStatus("Done", verdictColor)
         }
     }
 
     private fun renderUnsupported(path: String, displayName: String, type: String, magikaMs: Double) {
+        val verdict = Verdict.SUSPICIOUS
+        val verdictText = verdictLabel(verdict)
         runOnUiThread {
-            setChip(routeChip, "route: unsupported", ChipState.NEUTRAL)
+            setChip(routeChip, "route: unsupported", verdictChipState(verdict))
             setChip(cveChip, "CVE: n/a", ChipState.NEUTRAL)
             setChip(dngChip, "DNG: n/a", ChipState.NEUTRAL)
             setChip(engineChip, "engine: —", ChipState.NEUTRAL)
             engineScoreView.text = "Unsupported type: $type"
             engineDetailView.text = String.format("magika_time=%.2fms", magikaMs)
-            verdictView.text = "UNSUPPORTED"
-            verdictView.setTextColor(ContextCompat.getColor(this, R.color.status_neutral))
-            verdictDetailView.text = "Decision: UNSUPPORTED"
+            verdictView.text = verdictText
+            verdictView.setTextColor(ContextCompat.getColor(this, verdictColor(verdict)))
+            verdictDetailView.text = "Decision: $verdictText (unsupported_type)"
 
             summaryView.text = buildString {
                 append("Selected: ").append(displayName).append("\n")
@@ -606,10 +679,10 @@ class MainActivity : AppCompatActivity() {
                 append("\nWorkflow:\n")
                 append("1) Magika → ").append(type).append("\n")
                 append("2) No detector available\n\n")
-                append("Decision: UNSUPPORTED\n")
+                append("Decision: ").append(verdictText).append("\n")
             }
 
-            updateStatus("Done", R.color.status_neutral)
+            updateStatus("Done", verdictColor(verdict))
         }
     }
 
@@ -645,8 +718,14 @@ class MainActivity : AppCompatActivity() {
             var jpegCount = 0
 
             var cveHitCount = 0
+            var staticWarnCount = 0
             var unsupportedCount = 0
+            var typeMismatchCount = 0
+            var anomalyCount = 0
+            var errorCount = 0
+
             var verdictMalCount = 0
+            var verdictSusCount = 0
             var verdictBenCount = 0
 
             for (path in paths) {
@@ -658,8 +737,9 @@ class MainActivity : AppCompatActivity() {
                 val expected = expectedTypeFromName(path)
 
                 if (expected != "unknown" && !isTypeCompatible(expected, type)) {
-                    verdictMalCount++
-                    Log.i("HybridDetector", "type=$type | decision=MAL(type_mismatch) | expected=$expected | $path")
+                    typeMismatchCount += 1
+                    verdictSusCount += 1
+                    Log.i("HybridDetector", "type=$type | decision=SUSP(type_mismatch) | expected=$expected | $path")
                     continue
                 }
 
@@ -679,21 +759,36 @@ class MainActivity : AppCompatActivity() {
                         jpegCount += 1
                     }
 
-                    val isMal = jpegScore != null && jpegScore >= jpegMeta.threshold
-                    if (isMal) verdictMalCount++ else verdictBenCount++
+                    val decision = when {
+                        jpegScore == null -> {
+                            errorCount += 1
+                            verdictSusCount += 1
+                            "SUSP(jpeg_ae_failed)"
+                        }
+                        jpegScore >= jpegMeta.threshold -> {
+                            anomalyCount += 1
+                            verdictSusCount += 1
+                            "SUSP(jpeg_anomaly)"
+                        }
+                        else -> {
+                            verdictBenCount += 1
+                            "BEN(jpeg_ae)"
+                        }
+                    }
                     val part = if (jpegScore != null) {
                         String.format("score=%.6f thr=%.6f ex=%.2fms in=%.2fms",
                             jpegScore, jpegMeta.threshold, jExtractMs, jInferMs)
                     } else {
                         "score=FAIL"
                     }
-                    Log.i("HybridDetector", "type=jpeg | decision=${if (isMal) "MAL" else "BEN"}(jpeg_ae) | $part | $path")
+                    Log.i("HybridDetector", "type=jpeg | decision=$decision | $part | $path")
                     continue
                 }
 
                 if (type != "tiff") {
                     unsupportedCount += 1
-                    Log.i("HybridDetector", "type=$type | skipped | $path")
+                    verdictSusCount += 1
+                    Log.i("HybridDetector", "type=$type | decision=SUSP(unsupported_type) | $path")
                     continue
                 }
 
@@ -704,10 +799,16 @@ class MainActivity : AppCompatActivity() {
                 totalCveNs += (c1 - c0)
 
                 if (cve.hasCveHits) {
-                    cveHitCount++
-                    verdictMalCount++
                     val ids = cve.hits.joinToString(",") { it.cveId }
-                    Log.i("HybridDetector", "type=tiff | decision=MAL(cve) | cve=$ids | $path")
+                    if (cve.hasMaliciousHits) {
+                        cveHitCount += 1
+                        verdictMalCount += 1
+                        Log.i("HybridDetector", "type=tiff | decision=MAL(cve_rules) | ids=$ids | $path")
+                    } else {
+                        staticWarnCount += 1
+                        verdictSusCount += 1
+                        Log.i("HybridDetector", "type=tiff | decision=SUSP(static_rules) | ids=$ids | $path")
+                    }
                     continue
                 }
 
@@ -729,20 +830,27 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     if (tagSeqInput == null || !tagSeqInput.isDng || tagSeqScore == null) {
-                        verdictMalCount++
+                        errorCount += 1
+                        verdictSusCount += 1
                         val reason = when {
                             tagSeqInput == null -> "extract_fail"
                             !tagSeqInput.isDng -> "not_dng"
                             else -> "infer_fail"
                         }
-                        Log.i("HybridDetector", "type=tiff | decision=MAL(tagseq_required_failed) | reason=$reason | ex=%.2fms in=%.2fms | %s"
+                        Log.i("HybridDetector", "type=tiff | decision=SUSP(tagseq_required_failed) | reason=$reason | ex=%.2fms in=%.2fms | %s"
                             .format(tExtractMs, tInferMs, path))
                         continue
                     }
 
-                    val isMal = tagSeqScore >= tagSeqMeta.threshold
-                    if (isMal) verdictMalCount++ else verdictBenCount++
-                    Log.i("HybridDetector", "type=tiff | decision=${if (isMal) "MAL" else "BEN"}(tagseq) | score=%.6f thr=%.6f ex=%.2fms in=%.2fms | %s"
+                    val decision = if (tagSeqScore >= tagSeqMeta.threshold) {
+                        anomalyCount += 1
+                        verdictSusCount += 1
+                        "SUSP(dng_anomaly)"
+                    } else {
+                        verdictBenCount += 1
+                        "BEN(tagseq)"
+                    }
+                    Log.i("HybridDetector", "type=tiff | decision=$decision | score=%.6f thr=%.6f ex=%.2fms in=%.2fms | %s"
                         .format(tagSeqScore, tagSeqMeta.threshold, tExtractMs, tInferMs, path))
                     continue
                 }
@@ -762,9 +870,23 @@ class MainActivity : AppCompatActivity() {
                     tiffAeCount += 1
                 }
 
-                val isMal = anomalyScore != null && anomalyScore >= tiffAeMeta.threshold
-                if (isMal) verdictMalCount++ else verdictBenCount++
-                Log.i("HybridDetector", "type=tiff | decision=${if (isMal) "MAL" else "BEN"}(tiff_ae) | score=%s thr=%.6f ex=%.2fms in=%.2fms | %s"
+                val decision = when {
+                    anomalyScore == null -> {
+                        errorCount += 1
+                        verdictSusCount += 1
+                        "SUSP(tiff_ae_failed)"
+                    }
+                    anomalyScore >= tiffAeMeta.threshold -> {
+                        anomalyCount += 1
+                        verdictSusCount += 1
+                        "SUSP(tiff_anomaly)"
+                    }
+                    else -> {
+                        verdictBenCount += 1
+                        "BEN(tiff_ae)"
+                    }
+                }
+                Log.i("HybridDetector", "type=tiff | decision=$decision | score=%s thr=%.6f ex=%.2fms in=%.2fms | %s"
                     .format(anomalyScore?.let { "%.6f".format(it) } ?: "FAIL", tiffAeMeta.threshold, aExtractMs, aInferMs, path))
             }
 
@@ -784,10 +906,17 @@ class MainActivity : AppCompatActivity() {
                 append(String.format("- TagSeq: %.6f\n", tagSeqMeta.threshold))
                 append(String.format("- JPEG AE: %.6f\n\n", jpegMeta.threshold))
                 append("Results:\n")
-                append(String.format("- BEN: %d\n", verdictBenCount))
-                append(String.format("- MAL: %d\n", verdictMalCount))
-                append(String.format("- CVE hits: %d\n", cveHitCount))
-                append(String.format("- Unsupported: %d\n\n", unsupportedCount))
+                append(String.format("- BENIGN: %d\n", verdictBenCount))
+                append(String.format("- SUSPICIOUS: %d\n", verdictSusCount))
+                append(String.format("- MALICIOUS: %d\n\n", verdictMalCount))
+                append("Suspicious breakdown:\n")
+                append(String.format("- static warnings: %d\n", staticWarnCount))
+                append(String.format("- anomalies: %d\n", anomalyCount))
+                append(String.format("- type mismatch: %d\n", typeMismatchCount))
+                append(String.format("- unsupported type: %d\n", unsupportedCount))
+                append(String.format("- errors: %d\n\n", errorCount))
+                append("Malicious breakdown:\n")
+                append(String.format("- CVE hits: %d\n\n", cveHitCount))
                 append("Average timings:\n")
                 append(String.format("- Magika: %.3fms/file\n", avgMagikaMs))
                 append(String.format("- CVE rules: %.3fms/file\n", avgCveMs))

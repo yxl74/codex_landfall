@@ -15,6 +15,7 @@ __pycache__/
 /android/HybridDetectorApp/build/
 /android/HybridDetectorApp/local.properties
 /android/HybridDetectorApp/.idea/
+/android/HybridDetectorApp/app/src/main/legacy_assets/
 
 # IDE/editor
 .vscode/

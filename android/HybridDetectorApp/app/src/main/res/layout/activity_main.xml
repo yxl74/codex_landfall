@@ -248,6 +248,14 @@
                         android:textAppearance="?attr/textAppearanceTitleMedium" />
 
                     <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="BENIGN = normal • SUSPICIOUS = anomaly/unknown • MALICIOUS = CVE hit"
+                        android:textAppearance="?attr/textAppearanceBodySmall"
+                        android:textColor="@color/status_neutral" />
+
+                    <TextView
                         android:id="@+id/verdictView"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"

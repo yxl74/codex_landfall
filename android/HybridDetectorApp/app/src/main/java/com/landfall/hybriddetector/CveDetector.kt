@@ -2,10 +2,17 @@ package com.landfall.hybriddetector
 
 import android.os.SystemClock
 
-data class CveHit(val cveId: String, val description: String)
+enum class FindingSeverity {
+    MALICIOUS,
+    SUSPICIOUS,
+}
+
+data class CveHit(val cveId: String, val description: String, val severity: FindingSeverity)
 
 data class CveResult(val hits: List<CveHit>, val scanTimeMs: Float) {
     val hasCveHits get() = hits.isNotEmpty()
+    val hasMaliciousHits get() = hits.any { it.severity == FindingSeverity.MALICIOUS }
+    val hasSuspiciousHits get() = hits.any { it.severity == FindingSeverity.SUSPICIOUS }
 }
 
 /**
@@ -26,7 +33,8 @@ object CveDetector {
         if (features.maxDeclaredOpcodeCount > 1_000_000) {
             hits.add(CveHit(
                 cveId = "CVE-2025-21043",
-                description = "Declared opcode count ${features.maxDeclaredOpcodeCount} exceeds 1M limit"
+                description = "Declared opcode count ${features.maxDeclaredOpcodeCount} exceeds 1M limit",
+                severity = FindingSeverity.MALICIOUS,
             ))
         }
 
@@ -36,18 +44,23 @@ object CveDetector {
         if (features.sof3ComponentMismatch) {
             hits.add(CveHit(
                 cveId = "CVE-2025-43300",
-                description = "JPEG SOF3 component count mismatch (SPP=2, Compression=7)"
+                description = "JPEG SOF3 component count mismatch (SPP=2, Compression=7)",
+                severity = FindingSeverity.MALICIOUS,
             ))
         }
 
         // Rule 3: TILE-CONFIG — Tile configuration anomalies
+        //
+        // Real-world TIFFs can legitimately have surprising tile layouts, so this is
+        // treated as "SUSPICIOUS" rather than a high-confidence CVE match.
         // 3a: tile_offsets_count != tile_byte_counts_count
         if (features.tileOffsetsCount > 0 || features.tileByteCountsCount > 0) {
             if (features.tileOffsetsCount != features.tileByteCountsCount) {
                 hits.add(CveHit(
                     cveId = "TILE-CONFIG",
                     description = "Tile offsets count (${features.tileOffsetsCount}) != " +
-                        "byte counts count (${features.tileByteCountsCount})"
+                        "byte counts count (${features.tileByteCountsCount})",
+                    severity = FindingSeverity.SUSPICIOUS,
                 ))
             }
         }
@@ -58,7 +71,8 @@ object CveDetector {
                 hits.add(CveHit(
                     cveId = "TILE-CONFIG",
                     description = "Tile count (${features.tileOffsetsCount}) != " +
-                        "expected from geometry (${features.expectedTileCount})"
+                        "expected from geometry (${features.expectedTileCount})",
+                    severity = FindingSeverity.SUSPICIOUS,
                 ))
             }
         }
@@ -73,7 +87,8 @@ object CveDetector {
         if (maxDim > EXTREME_DIM_THRESHOLD) {
             hits.add(CveHit(
                 cveId = "TILE-DIM",
-                description = "Extreme dimension $maxDim exceeds threshold"
+                description = "Extreme dimension $maxDim exceeds threshold",
+                severity = FindingSeverity.SUSPICIOUS,
             ))
         }
 
